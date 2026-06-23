@@ -1,0 +1,6 @@
+{
+  "name": "Black Panther Test Tracker",
+  "description": "A sleek, cat-themed tracker for student test performance featuring automatic grade conversions, custom stealth wild-cat nicknames for secure rankings, and intuitive teacher dashboard controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
