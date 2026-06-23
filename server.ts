@@ -8,8 +8,8 @@ const app = express();
 const PORT = 3000;
 
 // Env variables with defaults for preview
-const TEACHER_USERNAME = process.env.TEACHER_USERNAME || "admin";
-const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || "panther2026";
+const TEACHER_USERNAME = process.env.TEACHER_USERNAME;
+const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD;
 
 // Filepath for local backup fallback - use /tmp/ on Vercel to bypass read-only filesystem restrictions
 const dbFilePath = process.env.VERCEL
