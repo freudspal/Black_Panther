@@ -8,11 +8,13 @@ const app = express();
 const PORT = 3000;
 
 // Env variables with defaults for preview
-const TEACHER_USERNAME = process.env.TEACHER_USERNAME;
-const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD;
+const TEACHER_USERNAME = process.env.TEACHER_USERNAME || "admin";
+const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || "panther2026";
 
-// Filepath for local backup fallback
-const dbFilePath = path.join(process.cwd(), "data-store.json");
+// Filepath for local backup fallback - use /tmp/ on Vercel to bypass read-only filesystem restrictions
+const dbFilePath = process.env.VERCEL
+  ? path.join("/tmp", "data-store.json")
+  : path.join(process.cwd(), "data-store.json");
 
 interface DBStructure {
   tests: { id: string; name: string; maxScore: number; dateCreated: string }[];
@@ -240,6 +242,23 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
         lastDbFetchTime = Date.now();
       }
     } else {
+      // If we are on Vercel/serverless and the tmp file doesn't exist yet, try to copy it from pre-bundle
+      const bundlePath = path.join(process.cwd(), "data-store.json");
+      if (process.env.VERCEL && fs.existsSync(bundlePath)) {
+        try {
+          const bundleData = fs.readFileSync(bundlePath, "utf-8");
+          const parsed = JSON.parse(bundleData);
+          if (Array.isArray(parsed.students)) {
+            fs.writeFileSync(dbFilePath, bundleData, "utf-8");
+            dbCache = parsed;
+            dbLoadedOnce = true;
+            lastDbFetchTime = Date.now();
+            return dbCache;
+          }
+        } catch (copyErr) {
+          console.error("[DB] Failed copy from package bundle to tmp directory:", copyErr);
+        }
+      }
       fs.writeFileSync(dbFilePath, JSON.stringify(dbCache, null, 2), "utf-8");
       dbLoadedOnce = true;
       lastDbFetchTime = Date.now();
@@ -287,7 +306,11 @@ async function saveDB(data: DBStructure): Promise<boolean> {
     fs.writeFileSync(dbFilePath, JSON.stringify(data, null, 2), "utf-8");
   } catch (err) {
     console.error("[DB] Local backup write crash:", err);
-    synced = false;
+    // If we have JSONBin credentials active, the cloud update was completed.
+    // Therefore, do not make the overall update report failure due to local filesystem read-only restrictions.
+    if (!apiKey || !binId) {
+      synced = false;
+    }
   }
 
   return synced;
