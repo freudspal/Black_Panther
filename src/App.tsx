@@ -911,17 +911,17 @@ export default function App() {
       
       {/* Dynamic Alert Banner */}
       {systemMessage && (
-        <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 flex items-center space-x-2 px-5 py-3 rounded-xl border backdrop-blur-md shadow-2xl transition-all duration-300 ${
+        <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 flex items-start sm:items-center space-x-3 px-5 py-3.5 rounded-xl border backdrop-blur-md shadow-2xl transition-all duration-300 w-[calc(100%-2rem)] max-w-lg sm:max-w-xl md:max-w-2xl ${
           systemMessage.type === "success"
             ? "bg-emerald-950/90 text-emerald-200 border-emerald-500/40"
             : systemMessage.type === "error"
             ? "bg-rose-950/90 text-rose-200 border-rose-500/40"
             : "bg-purple-950/90 text-purple-200 border-purple-500/40"
         }`}>
-          {systemMessage.type === "success" && <CheckCircle className="w-5 h-5 text-emerald-400" />}
-          {systemMessage.type === "error" && <AlertTriangle className="w-5 h-5 text-rose-400" />}
-          {systemMessage.type === "info" && <Cat className="w-5 h-5 text-purple-400 animate-bounce" />}
-          <span className="text-sm font-medium">{systemMessage.text}</span>
+          {systemMessage.type === "success" && <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />}
+          {systemMessage.type === "error" && <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5 sm:mt-0" />}
+          {systemMessage.type === "info" && <Cat className="w-5 h-5 text-purple-400 shrink-0 animate-bounce mt-0.5 sm:mt-0" />}
+          <span className="text-xs sm:text-sm font-medium leading-relaxed break-words flex-1">{systemMessage.text}</span>
         </div>
       )}
 
