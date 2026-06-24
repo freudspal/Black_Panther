@@ -1083,7 +1083,7 @@ export default function App() {
             <div className="col-span-1 lg:col-span-5 max-w-md mx-auto w-full h-full lg:max-w-none">
               <div className={`backdrop-blur-md rounded-3xl p-8 border shadow-2xl transition-all duration-300 flex flex-col justify-between h-full min-h-[380px] ${
                 loginRole === "teacher"
-                  ? "bg-amber-950/5 border-amber-900/40 shadow-amber-950/10"
+                  ? "bg-neutral-950/80 border-amber-900/40 shadow-amber-950/20"
                   : "bg-neutral-950/70 border-purple-950/80 shadow-purple-900/10"
               }`}>
                 
