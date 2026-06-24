@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { createHash } from "crypto";
 import dotenv from "dotenv";
+import { createClient } from "@supabase/supabase-js";
 
 // Initialize dotenv for local or serverless environments
 dotenv.config();
@@ -14,6 +15,42 @@ const PORT = 3000;
 function cleanEnvValue(val: string | undefined): string {
   if (!val) return "";
   return val.replace(/[\r\n\t]/g, "").trim();
+}
+
+// Initialize Supabase Client if available
+const supabaseUrl = cleanEnvValue(process.env.SUPABASE_URL);
+const supabaseKey = cleanEnvValue(process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY);
+
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
+
+let lastSupabaseError: string | null = null;
+let dbColumnCasing = {
+  tests: "snake" as "camel" | "snake",
+  students: "snake" as "camel" | "snake",
+  scores: "snake" as "camel" | "snake"
+};
+
+function mapCamelToSnake(str: string): string {
+  return str.replace(/([A-Z])/g, "_$1").toLowerCase();
+}
+
+function mapSnakeToCamel(str: string): string {
+  return str.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+}
+
+function mapRowKeys(row: any, targetCasing: "camel" | "snake"): any {
+  if (!row) return row;
+  const mapped: any = {};
+  for (const key of Object.keys(row)) {
+    if (targetCasing === "camel") {
+      const camelKey = mapSnakeToCamel(key);
+      mapped[camelKey] = row[key];
+    } else {
+      const snakeKey = mapCamelToSnake(key);
+      mapped[snakeKey] = row[key];
+    }
+  }
+  return mapped;
 }
 
 // Env variables helper with defaults for preview
@@ -203,21 +240,72 @@ function determineGrade(percentage: number): string {
   return "U";
 }
 
-// Local caching parameters to prevent JSONBin race conditions and API rate-limiting
+// Local caching parameters to prevent race conditions and API rate-limiting
 let dbLoadedOnce = false;
 let lastDbFetchTime = 0;
-const CACHE_TTL_MS = 15000; // Cache database from JSONBin for at most 15 seconds
+const CACHE_TTL_MS = 15000; // Cache database for at most 15 seconds
 let lastJsonBinError: string | null = null;
 
-// Database loader with intelligent cloud-sync or local fallback
+// Database loader with intelligent cloud-sync (Supabase or JSONBin) or local fallback
 async function loadDB(bypassCache = false): Promise<DBStructure> {
-  const apiKey = process.env.JSONBIN_API_KEY;
-  const binId = process.env.JSONBIN_BIN_ID;
-
   // If already loaded and cache TTL hasn't expired, return from memory immediately (high perf!)
   if (!bypassCache && dbLoadedOnce && (Date.now() - lastDbFetchTime < CACHE_TTL_MS)) {
     return dbCache;
   }
+
+  // 1. SUPABASE SYNC (PRIORITIZED)
+  if (supabase) {
+    try {
+      console.log("[DB] Syncing with Supabase...");
+      
+      // Fetch tests
+      const { data: testsRes, error: testsErr } = await supabase.from("tests").select("*");
+      if (testsErr) throw testsErr;
+      
+      // Fetch students
+      const { data: studentsRes, error: studentsErr } = await supabase.from("students").select("*");
+      if (studentsErr) throw studentsErr;
+      
+      // Fetch scores
+      const { data: scoresRes, error: scoresErr } = await supabase.from("scores").select("*");
+      if (scoresErr) throw scoresErr;
+      
+      // Detect column casings dynamically from fetched rows if present
+      if (testsRes && testsRes.length > 0) {
+        dbColumnCasing.tests = Object.keys(testsRes[0]).some(k => k.includes("maxScore") || k.includes("dateCreated")) ? "camel" : "snake";
+      }
+      if (studentsRes && studentsRes.length > 0) {
+        dbColumnCasing.students = Object.keys(studentsRes[0]).some(k => k.includes("passwordHash") || k.includes("classGroup") || k.includes("academicYear") || k.includes("hasChangedPassword")) ? "camel" : "snake";
+      }
+      if (scoresRes && scoresRes.length > 0) {
+        dbColumnCasing.scores = Object.keys(scoresRes[0]).some(k => k.includes("studentUsername") || k.includes("testId") || k.includes("maxScore")) ? "camel" : "snake";
+      }
+      
+      // Map results to camelCase structure
+      const tests = (testsRes || []).map(r => mapRowKeys(r, "camel"));
+      const students = (studentsRes || []).map(r => mapRowKeys(r, "camel"));
+      const scores = (scoresRes || []).map(r => mapRowKeys(r, "camel"));
+      
+      dbCache = { tests, students, scores };
+      dbLoadedOnce = true;
+      lastDbFetchTime = Date.now();
+      lastSupabaseError = null;
+      
+      // Synchronize local backup
+      try {
+        fs.writeFileSync(dbFilePath, JSON.stringify(dbCache, null, 2), "utf-8");
+      } catch (_) {}
+      
+      return dbCache;
+    } catch (err: any) {
+      lastSupabaseError = err.message || String(err);
+      console.error("[DB] Supabase load failed, falling back to other layers:", err);
+    }
+  }
+
+  // 2. JSONBIN SYNC (FALLBACK)
+  const apiKey = process.env.JSONBIN_API_KEY;
+  const binId = process.env.JSONBIN_BIN_ID;
 
   if (apiKey && binId) {
     try {
@@ -269,7 +357,7 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
     }
   }
 
-  // Local storage backup
+  // 3. LOCAL BACKUP SYNC
   try {
     if (fs.existsSync(dbFilePath)) {
       const dataStr = fs.readFileSync(dbFilePath, "utf-8");
@@ -315,9 +403,76 @@ async function saveDB(data: DBStructure): Promise<boolean> {
   dbLoadedOnce = true;
   lastDbFetchTime = Date.now(); // Ensures immediately following reads get memory data
 
+  let synced = true;
+
+  // 1. SUPABASE SYNC (PRIORITIZED)
+  if (supabase) {
+    try {
+      console.log("[DB] Synchronizing memory changes with Supabase...");
+      
+      // A. Sync tests
+      // Fetch all existing test IDs in Supabase to determine deleted ones
+      const { data: existingTests, error: existingTestsErr } = await supabase.from("tests").select("id");
+      if (!existingTestsErr && existingTests) {
+        const existingIds = existingTests.map((t: any) => String(t.id));
+        const currentIds = data.tests.map(t => String(t.id));
+        const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
+        if (idsToDelete.length > 0) {
+          await supabase.from("tests").delete().in("id", idsToDelete);
+        }
+      }
+      // Upsert current tests
+      if (data.tests.length > 0) {
+        const testsToSave = data.tests.map(t => mapRowKeys(t, dbColumnCasing.tests));
+        const { error: upsertErr } = await supabase.from("tests").upsert(testsToSave);
+        if (upsertErr) throw upsertErr;
+      }
+
+      // B. Sync students
+      const { data: existingStudents, error: existingStudentsErr } = await supabase.from("students").select("username");
+      if (!existingStudentsErr && existingStudents) {
+        const existingUsernames = existingStudents.map((s: any) => String(s.username).toLowerCase());
+        const currentUsernames = data.students.map(s => String(s.username).toLowerCase());
+        const usernamesToDelete = existingUsernames.filter(u => !currentUsernames.includes(u));
+        if (usernamesToDelete.length > 0) {
+          await supabase.from("students").delete().in("username", usernamesToDelete);
+        }
+      }
+      // Upsert current students
+      if (data.students.length > 0) {
+        const studentsToSave = data.students.map(s => mapRowKeys(s, dbColumnCasing.students));
+        const { error: upsertErr } = await supabase.from("students").upsert(studentsToSave);
+        if (upsertErr) throw upsertErr;
+      }
+
+      // C. Sync scores
+      const { data: existingScores, error: existingScoresErr } = await supabase.from("scores").select("id");
+      if (!existingScoresErr && existingScores) {
+        const existingIds = existingScores.map((s: any) => String(s.id));
+        const currentIds = data.scores.map(s => String(s.id));
+        const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
+        if (idsToDelete.length > 0) {
+          await supabase.from("scores").delete().in("id", idsToDelete);
+        }
+      }
+      // Upsert current scores
+      if (data.scores.length > 0) {
+        const scoresToSave = data.scores.map(s => mapRowKeys(s, dbColumnCasing.scores));
+        const { error: upsertErr } = await supabase.from("scores").upsert(scoresToSave);
+        if (upsertErr) throw upsertErr;
+      }
+
+      lastSupabaseError = null;
+    } catch (err: any) {
+      lastSupabaseError = err.message || String(err);
+      console.error("[DB] Supabase write failed:", err);
+      synced = false;
+    }
+  }
+
+  // 2. JSONBIN SYNC (FALLBACK)
   const apiKey = process.env.JSONBIN_API_KEY;
   const binId = process.env.JSONBIN_BIN_ID;
-  let synced = true;
 
   if (apiKey && binId) {
     try {
@@ -355,9 +510,9 @@ async function saveDB(data: DBStructure): Promise<boolean> {
     fs.writeFileSync(dbFilePath, JSON.stringify(data, null, 2), "utf-8");
   } catch (err) {
     console.error("[DB] Local backup write crash:", err);
-    // If we have JSONBin credentials active, the cloud update was completed.
+    // If we have cloud syncing credentials active, the cloud update was completed.
     // Therefore, do not make the overall update report failure due to local filesystem read-only restrictions.
-    if (!apiKey || !binId) {
+    if (!apiKey && !binId && !supabase) {
       synced = false;
     }
   }
@@ -385,14 +540,18 @@ app.use("/api", (req, res, next) => {
 
 // Base configuration info
 app.get("/api/config-status", async (req, res) => {
+  const isUsingSupabase = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY));
   const isUsingJsonBin = !!(process.env.JSONBIN_API_KEY && process.env.JSONBIN_BIN_ID);
-  if (isUsingJsonBin && !dbLoadedOnce) {
+  if ((isUsingSupabase || isUsingJsonBin) && !dbLoadedOnce) {
     try {
       await loadDB();
     } catch (_) {}
   }
   res.json({
     success: true,
+    hasSupabase: isUsingSupabase,
+    supabaseUrl: process.env.SUPABASE_URL || null,
+    supabaseError: lastSupabaseError,
     hasJsonBin: isUsingJsonBin,
     binId: process.env.JSONBIN_BIN_ID || null,
     defaultTeacherUsername: getTeacherUsername(),
