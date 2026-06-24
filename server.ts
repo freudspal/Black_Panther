@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createHash } from "crypto";
-import { createServer as createViteServer } from "vite";
 
 export const app = express();
 const PORT = 3000;
@@ -915,7 +914,8 @@ async function startServer() {
   });
 
   // Vite Integration for Hot Middleware serving
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
