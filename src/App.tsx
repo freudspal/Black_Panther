@@ -24,7 +24,8 @@ import {
   Info,
   Hash,
   Upload,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Download
 } from "lucide-react";
 import {
   AreaChart,
@@ -79,7 +80,6 @@ export default function App() {
   // Authentic input states
   const [loginUsername, setLoginUsername] = useState<string>("");
   const [loginPassword, setLoginPassword] = useState<string>("");
-  const [loginRole, setLoginRole] = useState<"student" | "teacher">("student");
 
   // Core Data loaded from APIs
   const [tests, setTests] = useState<TestTemplate[]>([]);
@@ -268,7 +268,6 @@ export default function App() {
     const emailIdx = headers.findIndex(h => h.includes("email") || h.includes("address") || h.includes("student email") || h.includes("username"));
     const classIdx = headers.findIndex(h => h.includes("class") || h.includes("group"));
     const yearIdx = headers.findIndex(h => h.includes("year") || h.includes("cycle") || h.includes("academic"));
-    const nickIdx = headers.findIndex(h => h.includes("nickname") || h.includes("alias") || h.includes("name"));
 
     if (emailIdx === -1) {
       showNotification("Headers must include student email address or username.", "error");
@@ -282,9 +281,8 @@ export default function App() {
       const email = cols[emailIdx];
       const classGroup = classIdx !== -1 && cols[classIdx] ? cols[classIdx] : "A";
       const academicYear = yearIdx !== -1 && cols[yearIdx] ? cols[yearIdx] : "26-27";
-      const nickname = nickIdx !== -1 && cols[nickIdx] ? cols[nickIdx] : "";
       if (email) {
-        studentsParsed.push({ email, classGroup, academicYear, nickname });
+        studentsParsed.push({ email, classGroup, academicYear });
       }
     }
 
@@ -339,6 +337,33 @@ export default function App() {
     } catch (_) {
       showNotification("Network delay during bulk ingest process.", "error");
     }
+  };
+
+  const downloadTemplate = (type: "grades" | "assessments" | "students") => {
+    let content = "";
+    let filename = "";
+    
+    if (type === "students") {
+      content = "Email,Group,Academic Year\nstudent_agent1@school.com,A,26-27\nstudent_agent2@school.com,B,26-27\nstudent_agent3@school.com,A,26-27\n";
+      filename = "roster_template.csv";
+    } else if (type === "grades") {
+      content = "Students Email Address,Assessment Name,Max Marks,Actual Marks\nstudent_agent1@school.com,Introductory Mechanics,50,42\nstudent_agent2@school.com,Introductory Mechanics,50,31\nstudent_agent3@school.com,Introductory Mechanics,50,48\n";
+      filename = "grades_template.csv";
+    } else {
+      content = "Assessment Name,Max Marks\nThermodynamics Quiz,30\nWaves & Oscillations Final,100\nQuantum Basics Checkpoint,20\n";
+      filename = "topics_template.csv";
+    }
+    
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification(`Excel CSV template "${filename}" downloaded successfully.`, "success");
   };
 
   const handleTeacherManualEntry = async (e: React.FormEvent) => {
@@ -474,6 +499,7 @@ export default function App() {
   };
 
   // Standard Authorisations
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginUsername || !loginPassword) {
@@ -482,10 +508,7 @@ export default function App() {
     }
 
     try {
-      const isTeacher = loginRole === "teacher";
-      const loginEndpoint = isTeacher ? "/api/auth/teacher-login" : "/api/auth/login";
-
-      const response = await fetch(loginEndpoint, {
+      const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: loginUsername, password: loginPassword })
@@ -493,6 +516,7 @@ export default function App() {
       const data = await response.json();
 
       if (response.ok && data.success) {
+        const isTeacher = data.role === "teacher";
         setCurrentUser({
           username: data.user.username,
           nickname: data.user.nickname,
@@ -503,7 +527,7 @@ export default function App() {
         if (data.role === "student" && data.user.needsPasswordChange) {
           setStudentNeedsPasswordChange(true);
         }
-        setCurrentPage(data.role === "teacher" ? "teacher-dashboard" : "student-dashboard");
+        setCurrentPage(isTeacher ? "teacher-dashboard" : "student-dashboard");
         showNotification(`Welcome back, ${isTeacher ? "Alpha Director" : `Agent ${data.user.nickname}`}! Secure connection established.`, "success");
         // Clear login form
         setLoginUsername("");
@@ -1081,67 +1105,22 @@ export default function App() {
 
             {/* Floating Form Box */}
             <div className="col-span-1 lg:col-span-5 max-w-md mx-auto w-full h-full lg:max-w-none">
-              <div className={`backdrop-blur-md rounded-3xl p-8 border shadow-2xl transition-all duration-300 flex flex-col justify-between h-full min-h-[380px] ${
-                loginRole === "teacher"
-                  ? "bg-neutral-950/80 border-amber-900/40 shadow-amber-950/20"
-                  : "bg-neutral-950/70 border-purple-950/80 shadow-purple-900/10"
-              }`}>
+              <div className="backdrop-blur-md rounded-3xl p-8 border shadow-2xl transition-all duration-300 flex flex-col justify-between h-full min-h-[380px] bg-neutral-950/75 border-purple-950/80 shadow-purple-900/10">
                 
                 {/* LOGIN FORM */}
                 <form onSubmit={handleLogin} className="flex-1 flex flex-col justify-between space-y-5">
                   <div className="space-y-4">
                     <div className="text-center pb-2">
-                      <Cat className={`w-8 h-8 mx-auto opacity-70 mb-2 transition-colors ${
-                        loginRole === "teacher" ? "text-amber-400" : "text-purple-400"
-                      }`} />
+                      <Cat className="w-8 h-8 mx-auto opacity-70 mb-2 text-purple-400" />
                       <h2 className="text-lg font-bold text-white tracking-tight">Access Control Center</h2>
                       <p className="text-xs text-neutral-500 mt-1">
-                        {loginRole === "teacher"
-                          ? "Teacher administrative connection with secure environment keys"
-                          : "Authenticate student alias to log scores and track progress"
-                        }
+                        Authenticate with your student stealth alias or teacher administrator credentials.
                       </p>
                     </div>
 
-                    {/* Role Selector Tabs */}
-                    <div className="grid grid-cols-2 gap-2 p-1 bg-[#030304] border border-neutral-900 rounded-xl mb-4">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoginRole("student");
-                          setLoginUsername("");
-                          setLoginPassword("");
-                        }}
-                        className={`py-2 text-[10px] font-mono uppercase font-bold tracking-wider rounded-lg transition-all ${
-                          loginRole === "student"
-                            ? "bg-purple-900/40 text-purple-300 border border-purple-800/40 shadow-inner"
-                            : "text-neutral-500 hover:text-neutral-300"
-                        }`}
-                      >
-                        Student Access
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoginRole("teacher");
-                          setLoginUsername("");
-                          setLoginPassword("");
-                        }}
-                        className={`py-2 text-[10px] font-mono uppercase font-bold tracking-wider rounded-lg transition-all ${
-                          loginRole === "teacher"
-                            ? "bg-amber-950/40 text-amber-300 border border-amber-900/40 shadow-inner"
-                            : "text-neutral-500 hover:text-neutral-300"
-                        }`}
-                      >
-                        Secure Teacher
-                      </button>
-                    </div>
-
                     <div className="space-y-1.5">
-                      <label className={`text-[10px] font-mono tracking-wider uppercase font-bold transition-colors ${
-                        loginRole === "teacher" ? "text-amber-400" : "text-purple-400"
-                      }`}>
-                        {loginRole === "teacher" ? "Administrator Username" : "Stealth Username"}
+                      <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">
+                        Username / Email Address
                       </label>
                       <input
                         id="login-username"
@@ -1149,20 +1128,14 @@ export default function App() {
                         required
                         value={loginUsername}
                         onChange={(e) => setLoginUsername(e.target.value)}
-                        placeholder={loginRole === "teacher" ? "e.g. admin" : "e.g. wildcat_panther"}
-                        className={`w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition ${
-                          loginRole === "teacher"
-                            ? "border-amber-950/80 focus:border-amber-600 focus:ring-1 focus:ring-amber-600"
-                            : "border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
-                        }`}
+                        placeholder="e.g. agent_alias or admin"
+                        className="w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className={`text-[10px] font-mono tracking-wider uppercase font-bold transition-colors ${
-                        loginRole === "teacher" ? "text-amber-400" : "text-purple-400"
-                      }`}>
-                        {loginRole === "teacher" ? "Administrator Password / Secret" : "Access Password / PIN"}
+                      <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">
+                        Access Password / PIN / Secret
                       </label>
                       <input
                         id="login-password"
@@ -1171,11 +1144,7 @@ export default function App() {
                         value={loginPassword}
                         onChange={(e) => setLoginPassword(e.target.value)}
                         placeholder="••••••••"
-                        className={`w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition ${
-                          loginRole === "teacher"
-                            ? "border-amber-950/80 focus:border-amber-600 focus:ring-1 focus:ring-amber-600"
-                            : "border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
-                        }`}
+                        className="w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
                       />
                     </div>
                   </div>
@@ -1183,13 +1152,9 @@ export default function App() {
                   <button
                     id="login-submit-btn"
                     type="submit"
-                    className={`w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white transition shadow-lg font-display tracking-wide uppercase active:scale-[0.98] ${
-                      loginRole === "teacher"
-                        ? "bg-amber-700 hover:bg-amber-650 shadow-amber-650/15"
-                        : "bg-purple-700 hover:bg-purple-650 shadow-purple-650/15"
-                    }`}
+                    className="w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white transition shadow-lg font-display tracking-wide uppercase active:scale-[0.98] bg-purple-700 hover:bg-purple-650 shadow-purple-650/15"
                   >
-                    {loginRole === "teacher" ? "Authorize Admin Ingress" : "Authenticate Ingress"}
+                    Authenticate Ingress
                   </button>
                 </form>
 
@@ -1758,6 +1723,17 @@ export default function App() {
                           <span className="block text-[9px] text-neutral-500 italic mt-1 font-mono">
                             * Integrates on-the-fly student rosters. Existing duplicate matches are automatically pruned.
                           </span>
+                          <div className="pt-2 border-t border-neutral-900/60 flex justify-between items-center">
+                            <span className="text-[9px] text-neutral-500 font-mono">Need a starter template?</span>
+                            <button
+                              type="button"
+                              onClick={() => downloadTemplate("grades")}
+                              className="flex items-center text-[10px] font-bold font-mono text-amber-400 hover:text-amber-350 transition"
+                            >
+                              <Download className="w-3.5 h-3.5 mr-1 text-amber-400" />
+                              Download Excel Template (.csv)
+                            </button>
+                          </div>
                         </div>
 
                         {/* File CSV Uploader */}
@@ -1826,6 +1802,17 @@ export default function App() {
                           <div className="bg-[#030304] rounded p-1.5 mt-1 border border-neutral-950 select-all font-mono text-[9px] text-neutral-500 overflow-x-auto whitespace-pre">
                             {"assessment name, max marks\nMechanics quiz 1, 50\nOrganic Chemistry Quiz, 40\nBiochem Practical, 25"}
                           </div>
+                          <div className="pt-2 border-t border-neutral-900/60 flex justify-between items-center">
+                            <span className="text-[9px] text-neutral-500 font-mono">Need a starter template?</span>
+                            <button
+                              type="button"
+                              onClick={() => downloadTemplate("assessments")}
+                              className="flex items-center text-[10px] font-bold font-mono text-purple-400 hover:text-purple-350 transition"
+                            >
+                              <Download className="w-3.5 h-3.5 mr-1 text-purple-400" />
+                              Download Excel Template (.csv)
+                            </button>
+                          </div>
                         </div>
 
                         {/* File CSV Uploader */}
@@ -1889,14 +1876,25 @@ export default function App() {
                         <div className="rounded-xl border border-dashed border-purple-950/85 p-3 text-[11px] leading-relaxed text-neutral-400 bg-[#030304]/30 space-y-1.5">
                           <span className="font-bold text-purple-400 block font-mono text-[9px] uppercase tracking-wider">Students Roster Schema:</span>
                           <p>
-                            Header structure row: <code className="bg-[#030304] border border-neutral-800 px-1 rounded font-mono text-purple-350">email, Group, Academic Year, Nickname</code>
+                            Header structure row: <code className="bg-[#030304] border border-neutral-800 px-1 rounded font-mono text-purple-350">email, Group, Academic Year</code>
                           </p>
                           <div className="bg-[#030304] rounded p-1.5 mt-1 border border-neutral-950 select-all font-mono text-[9px] text-neutral-500 overflow-x-auto whitespace-pre">
-                            {"email, Group, Academic Year, Nickname\nstudent1@domain.com, A, 26-27, Tony Stark\nstudent2@domain.com, B, 26-27, Bruce Banner"}
+                            {"email, Group, Academic Year\nstudent1@domain.com, A, 26-27\nstudent2@domain.com, B, 26-27"}
                           </div>
                           <span className="block text-[9px] text-neutral-500 font-mono italic mt-1">
-                            * Installs password of "1234" by default. Students will be locked into changing credentials on their first login cycle.
+                            * Installs password of "1234" by default. A funny wild cat name (e.g. Midnight Panther, Shadow Lynx) is dynamically generated for each agent!
                           </span>
+                          <div className="pt-2 border-t border-neutral-900/60 flex justify-between items-center">
+                            <span className="text-[9px] text-neutral-500 font-mono">Need a starter template?</span>
+                            <button
+                              type="button"
+                              onClick={() => downloadTemplate("students")}
+                              className="flex items-center text-[10px] font-bold font-mono text-purple-400 hover:text-purple-350 transition"
+                            >
+                              <Download className="w-3.5 h-3.5 mr-1 text-purple-400" />
+                              Download Excel Template (.csv)
+                            </button>
+                          </div>
                         </div>
 
                         {/* File CSV Uploader */}
@@ -1939,7 +1937,7 @@ export default function App() {
                               rows={4}
                               value={bulkTextInput}
                               onChange={(e) => setBulkTextInput(e.target.value)}
-                              placeholder={`email, Group, Academic Year, Nickname\nstudent1@domain.com, A, 26-27, Tony Stark`}
+                              placeholder={`email, Group, Academic Year\nstudent1@domain.com, A, 26-27`}
                               className="w-full bg-[#030304] border border-purple-950/80 rounded-xl p-3 text-xs text-white placeholder-neutral-700 focus:outline-none focus:border-purple-600 font-mono resize-none transition"
                             />
                           </div>
