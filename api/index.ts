@@ -106,13 +106,13 @@ function mapRowKeys(row: any, targetCasing: "camel" | "snake"): any {
 }
 
 // Env variables helper with defaults for preview
-function getTeacherUsername(): string {
-  const envVal = cleanEnvValue(process.env.TEACHER_USERNAME);
-  return envVal || "admin";
-}
-function getTeacherPassword(): string {
-  const envVal = cleanEnvValue(process.env.TEACHER_PASSWORD);
-  return envVal || "panther2026";
+const teacherUsername = cleanEnvValue(process.env.TEACHER_USERNAME);
+const teacherPassword = cleanEnvValue(process.env.TEACHER_PASSWORD);
+
+if (!teacherUsername || !teacherPassword) {
+  throw new Error(
+    "TEACHER_USERNAME and TEACHER_PASSWORD environment variables must be set"
+  );
 }
 
 // Filepath for local backup fallback - use /tmp/ on Vercel to bypass read-only filesystem restrictions
