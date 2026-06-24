@@ -64,12 +64,18 @@ export default function App() {
   
   // Configuration fetched from backend
   const [config, setConfig] = useState<{
+    hasSupabase: boolean;
+    supabaseUrl: string | null;
+    supabaseError: string | null;
     hasJsonBin: boolean;
     binId: string | null;
     defaultTeacherUsername: string;
     defaultTeacherPassword: string;
     jsonBinError: string | null;
   }>({
+    hasSupabase: false,
+    supabaseUrl: null,
+    supabaseError: null,
     hasJsonBin: false,
     binId: null,
     defaultTeacherUsername: "admin",
@@ -431,6 +437,9 @@ export default function App() {
       .then(data => {
         if (data.success) {
           setConfig({
+            hasSupabase: data.hasSupabase,
+            supabaseUrl: data.supabaseUrl,
+            supabaseError: data.supabaseError || null,
             hasJsonBin: data.hasJsonBin,
             binId: data.binId,
             defaultTeacherUsername: data.defaultTeacherUsername,
@@ -445,7 +454,8 @@ export default function App() {
   // Sync / Refresh helper
   const syncApplicationData = async () => {
     setIsRefreshing(true);
-    showNotification("Syncing live panthers vault with JSONBin cloud store...", "info");
+    const databaseType = config.hasSupabase ? "Supabase SQL Vault" : config.hasJsonBin ? "JSONBin cloud store" : "local cache";
+    showNotification(`Syncing live panthers vault with ${databaseType}...`, "info");
     try {
       if (currentUser) {
         const timestamp = Date.now();
@@ -1026,42 +1036,55 @@ export default function App() {
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
         {/* Offline or Error Warning Banner for Stateless Production Vercel Deployments */}
-        {(!config.hasJsonBin || config.jsonBinError) && (
+        {((!config.hasSupabase && !config.hasJsonBin) || config.supabaseError || (config.jsonBinError && !config.hasSupabase)) && (
           <div className="mb-6 bg-rose-950/15 border border-rose-900/60 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start space-y-3 sm:space-y-0 sm:space-x-4 shadow-xl shadow-rose-950/5 animate-in fade-in duration-300">
             <div className="p-2.5 bg-rose-950/65 rounded-xl border border-rose-900/50 text-rose-400 shrink-0">
               <AlertTriangle className="w-5 h-5 animate-pulse" />
             </div>
             <div className="flex-1 space-y-1.5">
               <h4 className="text-sm font-bold text-white tracking-tight flex items-center space-x-1.5">
-                <span>{config.jsonBinError ? "Cloud Database Connection Failed" : "Cloud Database Sync is Offline (Ephemeral Storage)"}</span>
-                <span className={`px-2 py-0.5 text-[9px] font-mono rounded-md uppercase font-bold tracking-wider ${config.jsonBinError ? 'bg-red-950/80 text-rose-350 border border-red-900/40' : 'bg-amber-900/40 text-amber-350'}`}>
-                  {config.jsonBinError ? 'Sync Error' : 'Storage Warning'}
+                <span>
+                  {config.supabaseError
+                    ? "Supabase Database Connection Failed"
+                    : config.jsonBinError
+                    ? "JSONBin Connection Failed"
+                    : "Cloud Database Sync is Offline (Ephemeral Storage)"}
+                </span>
+                <span className={`px-2 py-0.5 text-[9px] font-mono rounded-md uppercase font-bold tracking-wider ${(config.supabaseError || config.jsonBinError) ? 'bg-red-950/80 text-rose-350 border border-red-900/40' : 'bg-amber-900/40 text-amber-350'}`}>
+                  {(config.supabaseError || config.jsonBinError) ? 'Sync Error' : 'Storage Warning'}
                 </span>
               </h4>
               <p className="text-xs text-neutral-400 leading-relaxed max-w-4xl">
-                {config.jsonBinError ? (
+                {config.supabaseError ? (
                   <>
-                    The application detected JSONBin keys in your Vercel settings, but failed to establish a secure database connection. Error details: <code className="bg-red-950/40 text-red-350 px-1.5 py-0.5 rounded font-mono border border-rose-900/40">{config.jsonBinError}</code>
+                    The application detected Supabase settings, but failed to connect. Ensure your tables <code>students</code>, <code>tests</code>, and <code>scores</code> are created in Supabase with correct privileges. Error details: <code className="bg-red-950/40 text-red-350 px-1.5 py-0.5 rounded font-mono border border-rose-900/40">{config.supabaseError}</code>
+                  </>
+                ) : config.jsonBinError ? (
+                  <>
+                    The application detected JSONBin keys, but failed to establish a secure database connection. Error: <code className="bg-red-950/40 text-red-350 px-1.5 py-0.5 rounded font-mono border border-rose-900/40">{config.jsonBinError}</code>
                   </>
                 ) : (
                   <>
-                    Because Vercel serverless containers are stateless and reset periodically, any modifications you make (adding students, grades, or tests) will be <strong className="text-amber-300">lost on the next recycle</strong>. To activate dynamic syncing, configure <strong>JSONBin.io</strong> keys.
+                    Because serverless containers are stateless and reset periodically, any modifications you make (adding students, grades, or tests) will be <strong className="text-amber-300">lost on the next recycle</strong>. To activate dynamic syncing, configure <strong>Supabase</strong> (recommended) or <strong>JSONBin.io</strong> keys in your Vercel Environment Variables.
                   </>
                 )}
               </p>
               <div className="text-[11px] text-neutral-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span className="flex items-center space-x-1">
-                  <span className="h-1 text-rose-400 font-bold">•</span>
-                  <span>Set up a free JSON store on <a href="https://jsonbin.io" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline">JSONBin.io</a></span>
-                </span>
-                <span className="flex items-center space-x-1">
-                  <span className="h-1 text-rose-400 font-bold">•</span>
-                  <span>Double check <code>JSONBIN_API_KEY</code> & <code>JSONBIN_BIN_ID</code> in Vercel Project Settings</span>
-                </span>
-                {config.jsonBinError && (
+                {!config.hasSupabase && !config.hasJsonBin ? (
+                  <>
+                    <span className="flex items-center space-x-1">
+                      <span className="h-1 text-rose-400 font-bold">•</span>
+                      <span>Configure <code>SUPABASE_URL</code> & <code>SUPABASE_KEY</code> on Vercel</span>
+                    </span>
+                    <span className="flex items-center space-x-1">
+                      <span className="h-1 text-rose-400 font-bold">•</span>
+                      <span>Or set up <code>JSONBIN_API_KEY</code> & <code>JSONBIN_BIN_ID</code> as a fallback</span>
+                    </span>
+                  </>
+                ) : (
                   <span className="flex items-center space-x-1">
                     <span className="h-1 text-rose-400 font-bold">•</span>
-                    <strong className="text-rose-400">Important: Trigger a "Redeploy" in Vercel after editing keys!</strong>
+                    <strong className="text-rose-400">Important: Trigger a "Redeploy" in Vercel after editing env variables!</strong>
                   </span>
                 )}
               </div>
