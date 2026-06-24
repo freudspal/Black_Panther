@@ -744,7 +744,7 @@ app.post("/api/teacher/import-students", async (req, res) => {
 
       const classGroup = (item.classGroup || item.class || "A").trim();
       const academicYear = (item.academicYear || item.year || "26-27").trim();
-      const nickname = (item.nickname || "").trim() || generateNickname(db.students.map(s => s.nickname));
+      const nickname = generateNickname(db.students.map(s => s.nickname));
 
       db.students.push({
         username: email,
