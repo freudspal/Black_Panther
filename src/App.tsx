@@ -79,6 +79,7 @@ export default function App() {
   // Authentic input states
   const [loginUsername, setLoginUsername] = useState<string>("");
   const [loginPassword, setLoginPassword] = useState<string>("");
+  const [loginRole, setLoginRole] = useState<"student" | "teacher">("student");
 
   // Core Data loaded from APIs
   const [tests, setTests] = useState<TestTemplate[]>([]);
@@ -481,7 +482,10 @@ export default function App() {
     }
 
     try {
-      const response = await fetch("/api/auth/login", {
+      const isTeacher = loginRole === "teacher";
+      const loginEndpoint = isTeacher ? "/api/auth/teacher-login" : "/api/auth/login";
+
+      const response = await fetch(loginEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: loginUsername, password: loginPassword })
@@ -500,7 +504,7 @@ export default function App() {
           setStudentNeedsPasswordChange(true);
         }
         setCurrentPage(data.role === "teacher" ? "teacher-dashboard" : "student-dashboard");
-        showNotification(`Welcome back, Agent ${data.user.nickname}! Secure connection established.`, "success");
+        showNotification(`Welcome back, ${isTeacher ? "Alpha Director" : `Agent ${data.user.nickname}`}! Secure connection established.`, "success");
         // Clear login form
         setLoginUsername("");
         setLoginPassword("");
@@ -1077,32 +1081,89 @@ export default function App() {
 
             {/* Floating Form Box */}
             <div className="col-span-1 lg:col-span-5 max-w-md mx-auto w-full h-full lg:max-w-none">
-              <div className="bg-neutral-950/70 backdrop-blur-md rounded-3xl p-8 border border-purple-950/80 shadow-2xl shadow-purple-900/10 flex flex-col justify-between h-full min-h-[380px]">
+              <div className={`backdrop-blur-md rounded-3xl p-8 border shadow-2xl transition-all duration-300 flex flex-col justify-between h-full min-h-[380px] ${
+                loginRole === "teacher"
+                  ? "bg-amber-950/5 border-amber-900/40 shadow-amber-950/10"
+                  : "bg-neutral-950/70 border-purple-950/80 shadow-purple-900/10"
+              }`}>
                 
                 {/* LOGIN FORM */}
                 <form onSubmit={handleLogin} className="flex-1 flex flex-col justify-between space-y-5">
                   <div className="space-y-4">
                     <div className="text-center pb-2">
-                      <Cat className="w-8 h-8 text-purple-400 mx-auto opacity-70 mb-2" />
+                      <Cat className={`w-8 h-8 mx-auto opacity-70 mb-2 transition-colors ${
+                        loginRole === "teacher" ? "text-amber-400" : "text-purple-400"
+                      }`} />
                       <h2 className="text-lg font-bold text-white tracking-tight">Access Control Center</h2>
-                      <p className="text-xs text-neutral-500 mt-1">Authenticate student alias or administrator terminal</p>
+                      <p className="text-xs text-neutral-500 mt-1">
+                        {loginRole === "teacher"
+                          ? "Teacher administrative connection with secure environment keys"
+                          : "Authenticate student alias to log scores and track progress"
+                        }
+                      </p>
+                    </div>
+
+                    {/* Role Selector Tabs */}
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-[#030304] border border-neutral-900 rounded-xl mb-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLoginRole("student");
+                          setLoginUsername("");
+                          setLoginPassword("");
+                        }}
+                        className={`py-2 text-[10px] font-mono uppercase font-bold tracking-wider rounded-lg transition-all ${
+                          loginRole === "student"
+                            ? "bg-purple-900/40 text-purple-300 border border-purple-800/40 shadow-inner"
+                            : "text-neutral-500 hover:text-neutral-300"
+                        }`}
+                      >
+                        Student Access
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLoginRole("teacher");
+                          setLoginUsername("");
+                          setLoginPassword("");
+                        }}
+                        className={`py-2 text-[10px] font-mono uppercase font-bold tracking-wider rounded-lg transition-all ${
+                          loginRole === "teacher"
+                            ? "bg-amber-950/40 text-amber-300 border border-amber-900/40 shadow-inner"
+                            : "text-neutral-500 hover:text-neutral-300"
+                        }`}
+                      >
+                        Secure Teacher
+                      </button>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-mono tracking-wider text-purple-400 uppercase font-bold">Stealth Username</label>
+                      <label className={`text-[10px] font-mono tracking-wider uppercase font-bold transition-colors ${
+                        loginRole === "teacher" ? "text-amber-400" : "text-purple-400"
+                      }`}>
+                        {loginRole === "teacher" ? "Administrator Username" : "Stealth Username"}
+                      </label>
                       <input
                         id="login-username"
                         type="text"
                         required
                         value={loginUsername}
                         onChange={(e) => setLoginUsername(e.target.value)}
-                        placeholder="e.g. wildcat_panther or admin"
-                        className="w-full bg-[#030304] border border-purple-950/80 rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600 transition"
+                        placeholder={loginRole === "teacher" ? "e.g. admin" : "e.g. wildcat_panther"}
+                        className={`w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition ${
+                          loginRole === "teacher"
+                            ? "border-amber-950/80 focus:border-amber-600 focus:ring-1 focus:ring-amber-600"
+                            : "border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
+                        }`}
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-mono tracking-wider text-purple-400 uppercase font-bold">Access Password / PIN</label>
+                      <label className={`text-[10px] font-mono tracking-wider uppercase font-bold transition-colors ${
+                        loginRole === "teacher" ? "text-amber-400" : "text-purple-400"
+                      }`}>
+                        {loginRole === "teacher" ? "Administrator Password / Secret" : "Access Password / PIN"}
+                      </label>
                       <input
                         id="login-password"
                         type="password"
@@ -1110,7 +1171,11 @@ export default function App() {
                         value={loginPassword}
                         onChange={(e) => setLoginPassword(e.target.value)}
                         placeholder="••••••••"
-                        className="w-full bg-[#030304] border border-purple-950/80 rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600 transition"
+                        className={`w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition ${
+                          loginRole === "teacher"
+                            ? "border-amber-950/80 focus:border-amber-600 focus:ring-1 focus:ring-amber-600"
+                            : "border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
+                        }`}
                       />
                     </div>
                   </div>
@@ -1118,9 +1183,13 @@ export default function App() {
                   <button
                     id="login-submit-btn"
                     type="submit"
-                    className="w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white bg-purple-700 hover:bg-purple-650 transition shadow-lg shadow-purple-650/15 font-display tracking-wide uppercase active:scale-[0.98]"
+                    className={`w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white transition shadow-lg font-display tracking-wide uppercase active:scale-[0.98] ${
+                      loginRole === "teacher"
+                        ? "bg-amber-700 hover:bg-amber-650 shadow-amber-650/15"
+                        : "bg-purple-700 hover:bg-purple-650 shadow-purple-650/15"
+                    }`}
                   >
-                    Authenticate Ingress
+                    {loginRole === "teacher" ? "Authorize Admin Ingress" : "Authenticate Ingress"}
                   </button>
                 </form>
 
