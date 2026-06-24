@@ -12,7 +12,7 @@ interface HeaderProps {
   onLogout: () => void;
   currentPage: string;
   setCurrentPage: (page: string) => void;
-  config: { hasJsonBin: boolean; binId: string | null };
+  config: { hasSupabase: boolean; supabaseUrl: string | null };
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -111,11 +111,11 @@ export default function Header({
             <div className="hidden sm:flex items-center space-x-1.5 rounded-full bg-neutral-900 border border-neutral-800 px-3 py-1 text-[10px]">
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
-                  config.hasJsonBin ? "bg-emerald-500 animate-pulse" : "bg-purple-400"
+                  config.hasSupabase ? "bg-emerald-500 animate-pulse" : "bg-purple-400"
                 }`}
               ></span>
               <span className="font-mono text-neutral-400">
-                {config.hasJsonBin ? "Sync: JSONBin" : "Local Database"}
+                {config.hasSupabase ? "Sync: Supabase" : "Local Database"}
               </span>
               <button
                 onClick={onRefresh}

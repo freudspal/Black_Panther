@@ -296,9 +296,8 @@ function determineGrade(percentage: number): string {
 let dbLoadedOnce = false;
 let lastDbFetchTime = 0;
 const CACHE_TTL_MS = 15000; // Cache database for at most 15 seconds
-let lastJsonBinError: string | null = null;
 
-// Database loader with intelligent cloud-sync (Supabase or JSONBin) or local fallback
+// Database loader with intelligent cloud-sync (Supabase) or local fallback
 async function loadDB(bypassCache = false): Promise<DBStructure> {
   // If already loaded and cache TTL hasn't expired, return from memory immediately (high perf!)
   if (!bypassCache && dbLoadedOnce && (Date.now() - lastDbFetchTime < CACHE_TTL_MS)) {
@@ -377,65 +376,11 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
       return dbCache;
     } catch (err: any) {
       lastSupabaseError = err.message || String(err);
-      console.error("[DB] Supabase load failed, falling back to other layers:", err);
+      console.error("[DB] Supabase load failed, falling back to local storage:", err);
     }
   }
 
-  // 2. JSONBIN SYNC (FALLBACK)
-  const apiKey = process.env.JSONBIN_API_KEY;
-  const binId = process.env.JSONBIN_BIN_ID;
-
-  if (apiKey && binId) {
-    try {
-      console.log(`[DB] Syncing with JSONBin (${binId})...`);
-      const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
-        headers: {
-          "X-Master-Key": apiKey
-        }
-      });
-      if (response.ok) {
-        const body: any = await response.json();
-        if (body.record && Array.isArray(body.record.students)) {
-          dbCache = body.record;
-          dbLoadedOnce = true;
-          lastDbFetchTime = Date.now();
-          lastJsonBinError = null; // Clear error on success
-          // Synchronize local backup
-          try {
-            fs.writeFileSync(dbFilePath, JSON.stringify(dbCache, null, 2), "utf-8");
-          } catch (_) {}
-          return dbCache;
-        } else {
-          // If the bin exists but has no students record, auto-initialize it with our seed data!
-          console.log("[DB] JSONBin bin found but uninitialized. Initializing cloud bin with seed data...");
-          const success = await saveDB(dbCache);
-          if (success) {
-            dbLoadedOnce = true;
-            lastDbFetchTime = Date.now();
-            lastJsonBinError = null;
-            return dbCache;
-          } else {
-            lastJsonBinError = "Cloud bin is empty and auto-initialization failed.";
-          }
-        }
-      } else {
-        let errMsg = `HTTP ${response.status}`;
-        try {
-          const errBody = await response.json();
-          if (errBody && errBody.message) {
-            errMsg += `: ${errBody.message}`;
-          }
-        } catch (_) {}
-        lastJsonBinError = errMsg;
-        console.error(`[DB] JSONBin returned status ${response.status}. Using cached/local data instead.`);
-      }
-    } catch (err: any) {
-      lastJsonBinError = `Fetch error: ${err.message || err}`;
-      console.error("[DB] JSONBin fetch failed, using local backup:", err);
-    }
-  }
-
-  // 3. LOCAL BACKUP SYNC
+  // 2. LOCAL BACKUP SYNC
   try {
     if (fs.existsSync(dbFilePath)) {
       const dataStr = fs.readFileSync(dbFilePath, "utf-8");
@@ -579,41 +524,6 @@ async function saveDB(data: DBStructure): Promise<boolean> {
     }
   }
 
-  // 2. JSONBIN SYNC (FALLBACK)
-  const apiKey = process.env.JSONBIN_API_KEY;
-  const binId = process.env.JSONBIN_BIN_ID;
-
-  if (apiKey && binId) {
-    try {
-      const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Master-Key": apiKey
-        },
-        body: JSON.stringify(data)
-      });
-      if (!response.ok) {
-        let errMsg = `PUT ${response.status}`;
-        try {
-          const errBody = await response.json();
-          if (errBody && errBody.message) {
-            errMsg += `: ${errBody.message}`;
-          }
-        } catch (_) {}
-        lastJsonBinError = errMsg;
-        console.error(`[DB] JSONBin write failed: ${response.status}`);
-        synced = false;
-      } else {
-        lastJsonBinError = null; // Clear error on successful save
-      }
-    } catch (err: any) {
-      lastJsonBinError = `PUT Crash: ${err.message || err}`;
-      console.error("[DB] JSONBin write crash:", err);
-      synced = false;
-    }
-  }
-
   // Always back up locally
   try {
     fs.writeFileSync(dbFilePath, JSON.stringify(data, null, 2), "utf-8");
@@ -621,7 +531,7 @@ async function saveDB(data: DBStructure): Promise<boolean> {
     console.error("[DB] Local backup write crash:", err);
     // If we have cloud syncing credentials active, the cloud update was completed.
     // Therefore, do not make the overall update report failure due to local filesystem read-only restrictions.
-    if (!apiKey && !binId && !getSupabase()) {
+    if (!getSupabase()) {
       synced = false;
     }
   }
@@ -650,8 +560,7 @@ app.use("/api", (req, res, next) => {
 // Base configuration info
 app.get("/api/config-status", async (req, res) => {
   const isUsingSupabase = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY));
-  const isUsingJsonBin = !!(process.env.JSONBIN_API_KEY && process.env.JSONBIN_BIN_ID);
-  if ((isUsingSupabase || isUsingJsonBin) && !dbLoadedOnce) {
+  if (isUsingSupabase && !dbLoadedOnce) {
     try {
       await loadDB();
     } catch (_) {}
@@ -661,11 +570,8 @@ app.get("/api/config-status", async (req, res) => {
     hasSupabase: isUsingSupabase,
     supabaseUrl: process.env.SUPABASE_URL || null,
     supabaseError: lastSupabaseError,
-    hasJsonBin: isUsingJsonBin,
-    binId: process.env.JSONBIN_BIN_ID || null,
     defaultTeacherUsername: getTeacherUsername(),
     defaultTeacherPassword: getTeacherPassword(),
-    jsonBinError: lastJsonBinError,
   });
 });
 
