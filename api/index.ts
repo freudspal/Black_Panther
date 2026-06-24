@@ -17,13 +17,48 @@ function cleanEnvValue(val: string | undefined): string {
   return val.replace(/[\r\n\t]/g, "").trim();
 }
 
-// Initialize Supabase Client if available
-const supabaseUrl = cleanEnvValue(process.env.SUPABASE_URL);
-const supabaseKey = cleanEnvValue(process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY);
+// Clean Supabase URL robustly (stripping trailing slashes and common API endpoint suffixes)
+function cleanSupabaseUrl(url: string | undefined): string {
+  let cleaned = cleanEnvValue(url);
+  if (!cleaned) return "";
+  
+  // Ensure it starts with http:// or https://
+  if (cleaned && !cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
+    cleaned = "https://" + cleaned;
+  }
+  
+  // Strip trailing slashes
+  cleaned = cleaned.replace(/\/+$/, "");
+  
+  // Strip trailing /rest/v1 or /rest/v1/ (very common if they copy-pasted the REST API endpoint from dashboard)
+  cleaned = cleaned.replace(/\/rest\/v1\/?$/, "");
+  
+  // Strip trailing slashes again just in case
+  cleaned = cleaned.replace(/\/+$/, "");
+  
+  return cleaned;
+}
 
-const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
-
+// Initialize Supabase Client safely
+let supabase: any = null;
 let lastSupabaseError: string | null = null;
+
+const rawSupabaseUrl = process.env.SUPABASE_URL;
+const rawSupabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY;
+
+const supabaseUrl = cleanSupabaseUrl(rawSupabaseUrl);
+const supabaseKey = cleanEnvValue(rawSupabaseKey);
+
+if (supabaseUrl && supabaseKey) {
+  try {
+    supabase = createClient(supabaseUrl, supabaseKey);
+    console.log(`[DB] Supabase client initialized with URL: ${supabaseUrl}`);
+  } catch (err: any) {
+    supabase = null;
+    lastSupabaseError = `Client initialization failed: ${err.message || String(err)}`;
+    console.error("[DB] Top-level Supabase client creation crashed:", err);
+  }
+}
 let dbColumnCasing = {
   tests: "snake" as "camel" | "snake",
   students: "snake" as "camel" | "snake",
