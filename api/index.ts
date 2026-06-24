@@ -111,7 +111,7 @@ const teacherPassword = cleanEnvValue(process.env.TEACHER_PASSWORD);
 
 if (!teacherUsername || !teacherPassword) {
   throw new Error(
-    "TEACHER_USERNAME and TEACHER_PASSWORD environment variables must be set"
+    "TEACHER_USERNAME and TEACHER_PASSWORD must be configured"
   );
 }
 
@@ -565,13 +565,18 @@ app.get("/api/config-status", async (req, res) => {
       await loadDB();
     } catch (_) {}
   }
+
+  // Verify if custom teacher credentials are set in environment variables
+  const hasCustomTeacherCreds = !!(cleanEnvValue(process.env.TEACHER_USERNAME) || cleanEnvValue(process.env.TEACHER_PASSWORD));
+
   res.json({
     success: true,
     hasSupabase: isUsingSupabase,
     supabaseUrl: process.env.SUPABASE_URL || null,
     supabaseError: lastSupabaseError,
-    defaultTeacherUsername: getTeacherUsername(),
-    defaultTeacherPassword: getTeacherPassword(),
+    defaultTeacherUsername: hasCustomTeacherCreds ? "********" : teacherUsername,
+    defaultTeacherPassword: hasCustomTeacherCreds ? "********" : teacherPassword,
+    isCustomTeacherConfigured: hasCustomTeacherCreds
   });
 });
 
@@ -592,8 +597,8 @@ app.post("/api/auth/login", async (req, res) => {
     const trimmedUser = username.trim();
     
     // Check Teacher Credentials
-    const currentTeacherUsername = getTeacherUsername();
-    const currentTeacherPassword = getTeacherPassword();
+    const currentTeacherUsername = teacherUsername;
+    const currentTeacherPassword = teacherPassword;
     const inputUser = trimmedUser.toLowerCase();
     const inputPass = password.trim();
 
@@ -649,8 +654,8 @@ app.post("/api/auth/teacher-login", async (req, res) => {
     }
 
     const trimmedUser = username.trim();
-    const currentTeacherUsername = getTeacherUsername();
-    const currentTeacherPassword = getTeacherPassword();
+    const currentTeacherUsername = teacherUsername;
+    const currentTeacherPassword = teacherPassword;
     
     const inputUser = trimmedUser.toLowerCase();
     const inputPass = password.trim();
