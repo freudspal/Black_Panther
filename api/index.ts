@@ -2,16 +2,28 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createHash } from "crypto";
+import dotenv from "dotenv";
+
+// Initialize dotenv for local or serverless environments
+dotenv.config();
 
 export const app = express();
 const PORT = 3000;
 
+// Clean environment values to prevent trailing spaces, newlines, carriage returns from copy-pasting
+function cleanEnvValue(val: string | undefined): string {
+  if (!val) return "";
+  return val.replace(/[\r\n\t]/g, "").trim();
+}
+
 // Env variables helper with defaults for preview
 function getTeacherUsername(): string {
-  return process.env.TEACHER_USERNAME || "admin";
+  const envVal = cleanEnvValue(process.env.TEACHER_USERNAME);
+  return envVal || "admin";
 }
 function getTeacherPassword(): string {
-  return process.env.TEACHER_PASSWORD || "panther2026";
+  const envVal = cleanEnvValue(process.env.TEACHER_PASSWORD);
+  return envVal || "panther2026";
 }
 
 // Filepath for local backup fallback - use /tmp/ on Vercel to bypass read-only filesystem restrictions
@@ -408,7 +420,10 @@ app.post("/api/auth/login", async (req, res) => {
     // Check Teacher Credentials
     const currentTeacherUsername = getTeacherUsername();
     const currentTeacherPassword = getTeacherPassword();
-    if (trimmedUser.toLowerCase() === currentTeacherUsername.toLowerCase() && password === currentTeacherPassword) {
+    const inputUser = trimmedUser.toLowerCase();
+    const inputPass = password.trim();
+
+    if (inputUser === currentTeacherUsername.toLowerCase() && inputPass === currentTeacherPassword) {
       res.status(200).json({
         success: true,
         role: "teacher",
@@ -462,7 +477,11 @@ app.post("/api/auth/teacher-login", async (req, res) => {
     const trimmedUser = username.trim();
     const currentTeacherUsername = getTeacherUsername();
     const currentTeacherPassword = getTeacherPassword();
-    if (trimmedUser.toLowerCase() === currentTeacherUsername.toLowerCase() && password === currentTeacherPassword) {
+    
+    const inputUser = trimmedUser.toLowerCase();
+    const inputPass = password.trim();
+
+    if (inputUser === currentTeacherUsername.toLowerCase() && inputPass === currentTeacherPassword) {
       res.status(200).json({
         success: true,
         role: "teacher",
@@ -472,7 +491,22 @@ app.post("/api/auth/teacher-login", async (req, res) => {
         }
       });
     } else {
-      res.status(401).json({ error: "Access Denied. Teacher credentials do not match the secure environment values." });
+      const hasCustomUsername = !!process.env.TEACHER_USERNAME;
+      const hasCustomPassword = !!process.env.TEACHER_PASSWORD;
+      
+      let errMsg = "Access Denied. Credentials do not match Vercel environment variables.";
+      if (!hasCustomUsername || !hasCustomPassword) {
+        errMsg += " Note: Vercel environment secrets (TEACHER_USERNAME/TEACHER_PASSWORD) were not detected, so the app is currently using the default fallbacks (admin / panther2026). If you just added them in Vercel settings, please make sure to trigger a full 'Redeploy' of your project in Vercel so they can take effect!";
+      }
+
+      res.status(401).json({ 
+        error: errMsg,
+        diagnostics: {
+          hasCustomUsernameEnv: hasCustomUsername,
+          hasCustomPasswordEnv: hasCustomPassword,
+          defaultFallbackUsed: !hasCustomUsername || !hasCustomPassword
+        }
+      });
     }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
