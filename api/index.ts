@@ -11,10 +11,19 @@ dotenv.config();
 export const app = express();
 const PORT = 3000;
 
-// Clean environment values to prevent trailing spaces, newlines, carriage returns from copy-pasting
+// Clean environment values to prevent trailing spaces, newlines, carriage returns, and accidental surrounding quotes from copy-pasting
 function cleanEnvValue(val: string | undefined): string {
   if (!val) return "";
-  return val.replace(/[\r\n\t]/g, "").trim();
+  let cleaned = val.replace(/[\r\n\t]/g, "").trim();
+  // Strip surrounding double quotes if present
+  if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  // Strip surrounding single quotes if present
+  if (cleaned.startsWith("'") && cleaned.endsWith("'")) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  return cleaned.trim();
 }
 
 // Clean Supabase URL robustly (stripping trailing slashes and common API endpoint suffixes)
@@ -39,24 +48,32 @@ function cleanSupabaseUrl(url: string | undefined): string {
   return cleaned;
 }
 
-// Initialize Supabase Client safely
-let supabase: any = null;
+// Initialize Supabase Client safely and lazily
+let supabaseClient: any = null;
 let lastSupabaseError: string | null = null;
 
-const rawSupabaseUrl = process.env.SUPABASE_URL;
-const rawSupabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY;
+function getSupabase(): any {
+  if (supabaseClient) return supabaseClient;
 
-const supabaseUrl = cleanSupabaseUrl(rawSupabaseUrl);
-const supabaseKey = cleanEnvValue(rawSupabaseKey);
+  const rawSupabaseUrl = process.env.SUPABASE_URL;
+  const rawSupabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY;
 
-if (supabaseUrl && supabaseKey) {
+  const supabaseUrl = cleanSupabaseUrl(rawSupabaseUrl);
+  const supabaseKey = cleanEnvValue(rawSupabaseKey);
+
+  if (!supabaseUrl || !supabaseKey) {
+    return null;
+  }
+
   try {
-    supabase = createClient(supabaseUrl, supabaseKey);
-    console.log(`[DB] Supabase client initialized with URL: ${supabaseUrl}`);
+    supabaseClient = createClient(supabaseUrl, supabaseKey);
+    console.log(`[DB] Supabase client initialized lazily with URL: ${supabaseUrl}`);
+    return supabaseClient;
   } catch (err: any) {
-    supabase = null;
+    supabaseClient = null;
     lastSupabaseError = `Client initialization failed: ${err.message || String(err)}`;
-    console.error("[DB] Top-level Supabase client creation crashed:", err);
+    console.error("[DB] Supabase client creation crashed:", err);
+    return null;
   }
 }
 let dbColumnCasing = {
@@ -289,20 +306,21 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
   }
 
   // 1. SUPABASE SYNC (PRIORITIZED)
-  if (supabase) {
+  const activeSupabase = getSupabase();
+  if (activeSupabase) {
     try {
       console.log("[DB] Syncing with Supabase...");
       
       // Fetch tests
-      const { data: testsRes, error: testsErr } = await supabase.from("tests").select("*");
+      const { data: testsRes, error: testsErr } = await activeSupabase.from("tests").select("*");
       if (testsErr) throw testsErr;
       
       // Fetch students
-      const { data: studentsRes, error: studentsErr } = await supabase.from("students").select("*");
+      const { data: studentsRes, error: studentsErr } = await activeSupabase.from("students").select("*");
       if (studentsErr) throw studentsErr;
       
       // Fetch scores
-      const { data: scoresRes, error: scoresErr } = await supabase.from("scores").select("*");
+      const { data: scoresRes, error: scoresErr } = await activeSupabase.from("scores").select("*");
       if (scoresErr) throw scoresErr;
       
       // Detect column casings dynamically from fetched rows if present
@@ -466,30 +484,31 @@ async function saveDB(data: DBStructure): Promise<boolean> {
   let synced = true;
 
   // 1. SUPABASE SYNC (PRIORITIZED)
-  if (supabase) {
+  const activeSupabase = getSupabase();
+  if (activeSupabase) {
     try {
       console.log("[DB] Synchronizing memory changes with Supabase...");
       
       // A. Sync tests
       // Fetch all existing test IDs in Supabase to determine deleted ones
-      const { data: existingTests, error: existingTestsErr } = await supabase.from("tests").select("id");
+      const { data: existingTests, error: existingTestsErr } = await activeSupabase.from("tests").select("id");
       if (!existingTestsErr && existingTests) {
         const existingIds = existingTests.map((t: any) => String(t.id));
         const currentIds = data.tests.map(t => String(t.id));
         const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
         if (idsToDelete.length > 0) {
-          await supabase.from("tests").delete().in("id", idsToDelete);
+          await activeSupabase.from("tests").delete().in("id", idsToDelete);
         }
       }
       // Upsert current tests
       if (data.tests.length > 0) {
         let testsToSave = data.tests.map(t => mapRowKeys(t, dbColumnCasing.tests));
-        const { error: upsertErr } = await supabase.from("tests").upsert(testsToSave);
+        const { error: upsertErr } = await activeSupabase.from("tests").upsert(testsToSave);
         if (upsertErr) {
           const fallbackCasing = dbColumnCasing.tests === "snake" ? "camel" : "snake";
           console.warn(`[DB] Supabase tests upsert failed with ${dbColumnCasing.tests} casing. Retrying fallback ${fallbackCasing} casing...`);
           testsToSave = data.tests.map(t => mapRowKeys(t, fallbackCasing));
-          const { error: retryErr } = await supabase.from("tests").upsert(testsToSave);
+          const { error: retryErr } = await activeSupabase.from("tests").upsert(testsToSave);
           if (retryErr) {
             throw upsertErr;
           } else {
@@ -499,24 +518,24 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       }
 
       // B. Sync students
-      const { data: existingStudents, error: existingStudentsErr } = await supabase.from("students").select("username");
+      const { data: existingStudents, error: existingStudentsErr } = await activeSupabase.from("students").select("username");
       if (!existingStudentsErr && existingStudents) {
         const existingUsernames = existingStudents.map((s: any) => String(s.username).toLowerCase());
         const currentUsernames = data.students.map(s => String(s.username).toLowerCase());
         const usernamesToDelete = existingUsernames.filter(u => !currentUsernames.includes(u));
         if (usernamesToDelete.length > 0) {
-          await supabase.from("students").delete().in("username", usernamesToDelete);
+          await activeSupabase.from("students").delete().in("username", usernamesToDelete);
         }
       }
       // Upsert current students
       if (data.students.length > 0) {
         let studentsToSave = data.students.map(s => mapRowKeys(s, dbColumnCasing.students));
-        const { error: upsertErr } = await supabase.from("students").upsert(studentsToSave);
+        const { error: upsertErr } = await activeSupabase.from("students").upsert(studentsToSave);
         if (upsertErr) {
           const fallbackCasing = dbColumnCasing.students === "snake" ? "camel" : "snake";
           console.warn(`[DB] Supabase students upsert failed with ${dbColumnCasing.students} casing. Retrying fallback ${fallbackCasing} casing...`);
           studentsToSave = data.students.map(s => mapRowKeys(s, fallbackCasing));
-          const { error: retryErr } = await supabase.from("students").upsert(studentsToSave);
+          const { error: retryErr } = await activeSupabase.from("students").upsert(studentsToSave);
           if (retryErr) {
             throw upsertErr;
           } else {
@@ -526,24 +545,24 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       }
 
       // C. Sync scores
-      const { data: existingScores, error: existingScoresErr } = await supabase.from("scores").select("id");
+      const { data: existingScores, error: existingScoresErr } = await activeSupabase.from("scores").select("id");
       if (!existingScoresErr && existingScores) {
         const existingIds = existingScores.map((s: any) => String(s.id));
         const currentIds = data.scores.map(s => String(s.id));
         const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
         if (idsToDelete.length > 0) {
-          await supabase.from("scores").delete().in("id", idsToDelete);
+          await activeSupabase.from("scores").delete().in("id", idsToDelete);
         }
       }
       // Upsert current scores
       if (data.scores.length > 0) {
         let scoresToSave = data.scores.map(s => mapRowKeys(s, dbColumnCasing.scores));
-        const { error: upsertErr } = await supabase.from("scores").upsert(scoresToSave);
+        const { error: upsertErr } = await activeSupabase.from("scores").upsert(scoresToSave);
         if (upsertErr) {
           const fallbackCasing = dbColumnCasing.scores === "snake" ? "camel" : "snake";
           console.warn(`[DB] Supabase scores upsert failed with ${dbColumnCasing.scores} casing. Retrying fallback ${fallbackCasing} casing...`);
           scoresToSave = data.scores.map(s => mapRowKeys(s, fallbackCasing));
-          const { error: retryErr } = await supabase.from("scores").upsert(scoresToSave);
+          const { error: retryErr } = await activeSupabase.from("scores").upsert(scoresToSave);
           if (retryErr) {
             throw upsertErr;
           } else {
@@ -602,7 +621,7 @@ async function saveDB(data: DBStructure): Promise<boolean> {
     console.error("[DB] Local backup write crash:", err);
     // If we have cloud syncing credentials active, the cloud update was completed.
     // Therefore, do not make the overall update report failure due to local filesystem read-only restrictions.
-    if (!apiKey && !binId && !supabase) {
+    if (!apiKey && !binId && !getSupabase()) {
       synced = false;
     }
   }
