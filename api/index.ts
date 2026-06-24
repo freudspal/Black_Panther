@@ -444,6 +444,33 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// 2.3 TEACHER-ONLY SECURE LOGIN (DIRECT ENV CHECK ONLY)
+app.post("/api/auth/teacher-login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      res.status(400).json({ error: "Administrator username and password/secret are required." });
+      return;
+    }
+
+    const trimmedUser = username.trim();
+    if (trimmedUser.toLowerCase() === TEACHER_USERNAME.toLowerCase() && password === TEACHER_PASSWORD) {
+      res.status(200).json({
+        success: true,
+        role: "teacher",
+        user: {
+          username: TEACHER_USERNAME,
+          nickname: "Alpha Director"
+        }
+      });
+    } else {
+      res.status(401).json({ error: "Access Denied. Teacher credentials do not match the secure environment values." });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 2.5 CHANGE STUDENT PASSWORD
 app.post("/api/auth/change-password", async (req, res) => {
   try {
