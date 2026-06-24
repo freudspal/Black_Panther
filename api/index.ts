@@ -6,9 +6,13 @@ import { createHash } from "crypto";
 export const app = express();
 const PORT = 3000;
 
-// Env variables with defaults for preview
-const TEACHER_USERNAME = process.env.TEACHER_USERNAME || "admin";
-const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || "panther2026";
+// Env variables helper with defaults for preview
+function getTeacherUsername(): string {
+  return process.env.TEACHER_USERNAME || "admin";
+}
+function getTeacherPassword(): string {
+  return process.env.TEACHER_PASSWORD || "panther2026";
+}
 
 // Filepath for local backup fallback - use /tmp/ on Vercel to bypass read-only filesystem restrictions
 const dbFilePath = process.env.VERCEL
@@ -379,8 +383,8 @@ app.get("/api/config-status", async (req, res) => {
     success: true,
     hasJsonBin: isUsingJsonBin,
     binId: process.env.JSONBIN_BIN_ID || null,
-    defaultTeacherUsername: TEACHER_USERNAME,
-    defaultTeacherPassword: TEACHER_PASSWORD,
+    defaultTeacherUsername: getTeacherUsername(),
+    defaultTeacherPassword: getTeacherPassword(),
     jsonBinError: lastJsonBinError,
   });
 });
@@ -402,12 +406,14 @@ app.post("/api/auth/login", async (req, res) => {
     const trimmedUser = username.trim();
     
     // Check Teacher Credentials
-    if (trimmedUser.toLowerCase() === TEACHER_USERNAME.toLowerCase() && password === TEACHER_PASSWORD) {
+    const currentTeacherUsername = getTeacherUsername();
+    const currentTeacherPassword = getTeacherPassword();
+    if (trimmedUser.toLowerCase() === currentTeacherUsername.toLowerCase() && password === currentTeacherPassword) {
       res.status(200).json({
         success: true,
         role: "teacher",
         user: {
-          username: TEACHER_USERNAME,
+          username: currentTeacherUsername,
           nickname: "Alpha Director"
         }
       });
@@ -454,12 +460,14 @@ app.post("/api/auth/teacher-login", async (req, res) => {
     }
 
     const trimmedUser = username.trim();
-    if (trimmedUser.toLowerCase() === TEACHER_USERNAME.toLowerCase() && password === TEACHER_PASSWORD) {
+    const currentTeacherUsername = getTeacherUsername();
+    const currentTeacherPassword = getTeacherPassword();
+    if (trimmedUser.toLowerCase() === currentTeacherUsername.toLowerCase() && password === currentTeacherPassword) {
       res.status(200).json({
         success: true,
         role: "teacher",
         user: {
-          username: TEACHER_USERNAME,
+          username: currentTeacherUsername,
           nickname: "Alpha Director"
         }
       });
