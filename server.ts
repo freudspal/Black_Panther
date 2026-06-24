@@ -8,8 +8,8 @@ const app = express();
 const PORT = 3000;
 
 // Env variables with defaults for preview
-const TEACHER_USERNAME = process.env.TEACHER_USERNAME;
-const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD;
+const TEACHER_USERNAME = process.env.TEACHER_USERNAME || "admin";
+const TEACHER_PASSWORD = process.env.TEACHER_PASSWORD || "panther2026";
 
 // Filepath for local backup fallback - use /tmp/ on Vercel to bypass read-only filesystem restrictions
 const dbFilePath = process.env.VERCEL
@@ -192,6 +192,7 @@ function determineGrade(percentage: number): string {
 let dbLoadedOnce = false;
 let lastDbFetchTime = 0;
 const CACHE_TTL_MS = 15000; // Cache database from JSONBin for at most 15 seconds
+let lastJsonBinError: string | null = null;
 
 // Database loader with intelligent cloud-sync or local fallback
 async function loadDB(bypassCache = false): Promise<DBStructure> {
@@ -217,16 +218,38 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
           dbCache = body.record;
           dbLoadedOnce = true;
           lastDbFetchTime = Date.now();
+          lastJsonBinError = null; // Clear error on success
           // Synchronize local backup
           try {
             fs.writeFileSync(dbFilePath, JSON.stringify(dbCache, null, 2), "utf-8");
           } catch (_) {}
           return dbCache;
+        } else {
+          // If the bin exists but has no students record, auto-initialize it with our seed data!
+          console.log("[DB] JSONBin bin found but uninitialized. Initializing cloud bin with seed data...");
+          const success = await saveDB(dbCache);
+          if (success) {
+            dbLoadedOnce = true;
+            lastDbFetchTime = Date.now();
+            lastJsonBinError = null;
+            return dbCache;
+          } else {
+            lastJsonBinError = "Cloud bin is empty and auto-initialization failed.";
+          }
         }
       } else {
+        let errMsg = `HTTP ${response.status}`;
+        try {
+          const errBody = await response.json();
+          if (errBody && errBody.message) {
+            errMsg += `: ${errBody.message}`;
+          }
+        } catch (_) {}
+        lastJsonBinError = errMsg;
         console.error(`[DB] JSONBin returned status ${response.status}. Using cached/local data instead.`);
       }
-    } catch (err) {
+    } catch (err: any) {
+      lastJsonBinError = `Fetch error: ${err.message || err}`;
       console.error("[DB] JSONBin fetch failed, using local backup:", err);
     }
   }
@@ -292,10 +315,21 @@ async function saveDB(data: DBStructure): Promise<boolean> {
         body: JSON.stringify(data)
       });
       if (!response.ok) {
+        let errMsg = `PUT ${response.status}`;
+        try {
+          const errBody = await response.json();
+          if (errBody && errBody.message) {
+            errMsg += `: ${errBody.message}`;
+          }
+        } catch (_) {}
+        lastJsonBinError = errMsg;
         console.error(`[DB] JSONBin write failed: ${response.status}`);
         synced = false;
+      } else {
+        lastJsonBinError = null; // Clear error on successful save
       }
-    } catch (err) {
+    } catch (err: any) {
+      lastJsonBinError = `PUT Crash: ${err.message || err}`;
       console.error("[DB] JSONBin write crash:", err);
       synced = false;
     }
@@ -337,12 +371,18 @@ async function startServer() {
   // Base configuration info
   app.get("/api/config-status", async (req, res) => {
     const isUsingJsonBin = !!(process.env.JSONBIN_API_KEY && process.env.JSONBIN_BIN_ID);
+    if (isUsingJsonBin && !dbLoadedOnce) {
+      try {
+        await loadDB();
+      } catch (_) {}
+    }
     res.json({
       success: true,
       hasJsonBin: isUsingJsonBin,
       binId: process.env.JSONBIN_BIN_ID || null,
       defaultTeacherUsername: TEACHER_USERNAME,
       defaultTeacherPassword: TEACHER_PASSWORD,
+      jsonBinError: lastJsonBinError,
     });
   });
 
