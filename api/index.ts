@@ -321,7 +321,32 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
       const students = (studentsRes || []).map(r => mapRowKeys(r, "camel"));
       const scores = (scoresRes || []).map(r => mapRowKeys(r, "camel"));
       
-      dbCache = { tests, students, scores };
+      if (tests.length === 0 && students.length === 0 && scores.length === 0) {
+        console.log("[DB] Supabase tables are empty. Auto-seeding Supabase with local/pre-bundled data...");
+        try {
+          if (fs.existsSync(dbFilePath)) {
+            const dataStr = fs.readFileSync(dbFilePath, "utf-8");
+            const parsed = JSON.parse(dataStr);
+            if (Array.isArray(parsed.students) && parsed.students.length > 0) {
+              dbCache = parsed;
+            }
+          } else {
+            const bundlePath = path.join(process.cwd(), "data-store.json");
+            if (fs.existsSync(bundlePath)) {
+              const bundleData = fs.readFileSync(bundlePath, "utf-8");
+              const parsed = JSON.parse(bundleData);
+              if (Array.isArray(parsed.students) && parsed.students.length > 0) {
+                dbCache = parsed;
+              }
+            }
+          }
+        } catch (_) {}
+        
+        await saveDB(dbCache);
+      } else {
+        dbCache = { tests, students, scores };
+      }
+      
       dbLoadedOnce = true;
       lastDbFetchTime = Date.now();
       lastSupabaseError = null;
@@ -458,9 +483,19 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       }
       // Upsert current tests
       if (data.tests.length > 0) {
-        const testsToSave = data.tests.map(t => mapRowKeys(t, dbColumnCasing.tests));
+        let testsToSave = data.tests.map(t => mapRowKeys(t, dbColumnCasing.tests));
         const { error: upsertErr } = await supabase.from("tests").upsert(testsToSave);
-        if (upsertErr) throw upsertErr;
+        if (upsertErr) {
+          const fallbackCasing = dbColumnCasing.tests === "snake" ? "camel" : "snake";
+          console.warn(`[DB] Supabase tests upsert failed with ${dbColumnCasing.tests} casing. Retrying fallback ${fallbackCasing} casing...`);
+          testsToSave = data.tests.map(t => mapRowKeys(t, fallbackCasing));
+          const { error: retryErr } = await supabase.from("tests").upsert(testsToSave);
+          if (retryErr) {
+            throw upsertErr;
+          } else {
+            dbColumnCasing.tests = fallbackCasing;
+          }
+        }
       }
 
       // B. Sync students
@@ -475,9 +510,19 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       }
       // Upsert current students
       if (data.students.length > 0) {
-        const studentsToSave = data.students.map(s => mapRowKeys(s, dbColumnCasing.students));
+        let studentsToSave = data.students.map(s => mapRowKeys(s, dbColumnCasing.students));
         const { error: upsertErr } = await supabase.from("students").upsert(studentsToSave);
-        if (upsertErr) throw upsertErr;
+        if (upsertErr) {
+          const fallbackCasing = dbColumnCasing.students === "snake" ? "camel" : "snake";
+          console.warn(`[DB] Supabase students upsert failed with ${dbColumnCasing.students} casing. Retrying fallback ${fallbackCasing} casing...`);
+          studentsToSave = data.students.map(s => mapRowKeys(s, fallbackCasing));
+          const { error: retryErr } = await supabase.from("students").upsert(studentsToSave);
+          if (retryErr) {
+            throw upsertErr;
+          } else {
+            dbColumnCasing.students = fallbackCasing;
+          }
+        }
       }
 
       // C. Sync scores
@@ -492,9 +537,19 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       }
       // Upsert current scores
       if (data.scores.length > 0) {
-        const scoresToSave = data.scores.map(s => mapRowKeys(s, dbColumnCasing.scores));
+        let scoresToSave = data.scores.map(s => mapRowKeys(s, dbColumnCasing.scores));
         const { error: upsertErr } = await supabase.from("scores").upsert(scoresToSave);
-        if (upsertErr) throw upsertErr;
+        if (upsertErr) {
+          const fallbackCasing = dbColumnCasing.scores === "snake" ? "camel" : "snake";
+          console.warn(`[DB] Supabase scores upsert failed with ${dbColumnCasing.scores} casing. Retrying fallback ${fallbackCasing} casing...`);
+          scoresToSave = data.scores.map(s => mapRowKeys(s, fallbackCasing));
+          const { error: retryErr } = await supabase.from("scores").upsert(scoresToSave);
+          if (retryErr) {
+            throw upsertErr;
+          } else {
+            dbColumnCasing.scores = fallbackCasing;
+          }
+        }
       }
 
       lastSupabaseError = null;
