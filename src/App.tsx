@@ -1741,11 +1741,11 @@ export default function App() {
                         {/* File CSV Uploader */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-mono tracking-wider text-purple-400 uppercase font-bold block">Upload CSV / TSV File</label>
-                          <div className="relative border border-purple-950/80 bg-[#030304] rounded-xl p-3 flex flex-col items-center justify-center text-center group hover:border-purple-800/75 cursor-pointer transition">
+                          <div className="relative overflow-hidden border border-purple-950/80 bg-[#030304] rounded-xl p-3 flex flex-col items-center justify-center text-center group hover:border-purple-800/75 cursor-pointer transition">
                             <input
                               type="file"
                               accept=".csv,.tsv,.txt"
-                              className="absolute inset-0 opacity-0 cursor-pointer"
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
@@ -1820,11 +1820,11 @@ export default function App() {
                         {/* File CSV Uploader */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-mono tracking-wider text-purple-400 uppercase font-bold block">Upload CSV / TSV File</label>
-                          <div className="relative border border-purple-950/80 bg-[#030304] rounded-xl p-3 flex flex-col items-center justify-center text-center group hover:border-purple-800/75 cursor-pointer transition">
+                          <div className="relative overflow-hidden border border-purple-950/80 bg-[#030304] rounded-xl p-3 flex flex-col items-center justify-center text-center group hover:border-purple-800/75 cursor-pointer transition">
                             <input
                               type="file"
                               accept=".csv,.tsv,.txt"
-                              className="absolute inset-0 opacity-0 cursor-pointer"
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
@@ -1902,11 +1902,11 @@ export default function App() {
                         {/* File CSV Uploader */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-mono tracking-wider text-purple-400 uppercase font-bold block">Upload CSV / TSV File</label>
-                          <div className="relative border border-purple-950/80 bg-[#030304] rounded-xl p-3 flex flex-col items-center justify-center text-center group hover:border-purple-800/75 cursor-pointer transition">
+                          <div className="relative overflow-hidden border border-purple-950/80 bg-[#030304] rounded-xl p-3 flex flex-col items-center justify-center text-center group hover:border-purple-800/75 cursor-pointer transition">
                             <input
                               type="file"
                               accept=".csv,.tsv,.txt"
-                              className="absolute inset-0 opacity-0 cursor-pointer"
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
