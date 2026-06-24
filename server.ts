@@ -4,7 +4,7 @@ import fs from "fs";
 import { createHash } from "crypto";
 import { createServer as createViteServer } from "vite";
 
-const app = express();
+export const app = express();
 const PORT = 3000;
 
 // Env variables with defaults for preview
@@ -921,7 +921,7 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     // In production, serve absolute path files containing bundled React SPA
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -930,9 +930,11 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[SERVER] Black Panther Test Tracker booted elegantly on port ${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[SERVER] Black Panther Test Tracker booted elegantly on port ${PORT}`);
+    });
+  }
 }
 
 // Initialise Server with safety guards
