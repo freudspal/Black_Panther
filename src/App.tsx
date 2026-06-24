@@ -67,11 +67,13 @@ export default function App() {
     binId: string | null;
     defaultTeacherUsername: string;
     defaultTeacherPassword: string;
+    jsonBinError: string | null;
   }>({
     hasJsonBin: false,
     binId: null,
     defaultTeacherUsername: "admin",
     defaultTeacherPassword: "panther2026",
+    jsonBinError: null,
   });
 
   // Authentic input states
@@ -406,7 +408,8 @@ export default function App() {
             hasJsonBin: data.hasJsonBin,
             binId: data.binId,
             defaultTeacherUsername: data.defaultTeacherUsername,
-            defaultTeacherPassword: data.defaultTeacherPassword
+            defaultTeacherPassword: data.defaultTeacherPassword,
+            jsonBinError: data.jsonBinError || null
           });
         }
       })
@@ -994,29 +997,45 @@ export default function App() {
 
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        {/* Offline Warning Banner for Stateless Production Vercel Deployments */}
-        {!config.hasJsonBin && (
-          <div className="mb-6 bg-amber-950/25 border border-amber-900/60 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start space-y-3 sm:space-y-0 sm:space-x-4 shadow-xl shadow-amber-950/5 animate-in fade-in duration-300">
-            <div className="p-2.5 bg-amber-950/65 rounded-xl border border-amber-900/50 text-amber-400 shrink-0">
+        {/* Offline or Error Warning Banner for Stateless Production Vercel Deployments */}
+        {(!config.hasJsonBin || config.jsonBinError) && (
+          <div className="mb-6 bg-rose-950/15 border border-rose-900/60 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start space-y-3 sm:space-y-0 sm:space-x-4 shadow-xl shadow-rose-950/5 animate-in fade-in duration-300">
+            <div className="p-2.5 bg-rose-950/65 rounded-xl border border-rose-900/50 text-rose-400 shrink-0">
               <AlertTriangle className="w-5 h-5 animate-pulse" />
             </div>
             <div className="flex-1 space-y-1.5">
               <h4 className="text-sm font-bold text-white tracking-tight flex items-center space-x-1.5">
-                <span>Cloud Database Sync is Offline (Running to Ephemeral Storage)</span>
-                <span className="px-2 py-0.5 bg-amber-900/40 text-amber-350 text-[9px] font-mono rounded-md uppercase font-bold tracking-wider">Storage Warning</span>
+                <span>{config.jsonBinError ? "Cloud Database Connection Failed" : "Cloud Database Sync is Offline (Ephemeral Storage)"}</span>
+                <span className={`px-2 py-0.5 text-[9px] font-mono rounded-md uppercase font-bold tracking-wider ${config.jsonBinError ? 'bg-red-950/80 text-rose-350 border border-red-900/40' : 'bg-amber-900/40 text-amber-350'}`}>
+                  {config.jsonBinError ? 'Sync Error' : 'Storage Warning'}
+                </span>
               </h4>
               <p className="text-xs text-neutral-400 leading-relaxed max-w-4xl">
-                Because Vercel serverless containers are stateless and reset periodically, any modifications you make (adding students, grades, or tests) will be <strong className="text-amber-300">lost on the next recycle</strong>. To activate dynamic syncing, configure <strong>JSONBin.io</strong> keys.
+                {config.jsonBinError ? (
+                  <>
+                    The application detected JSONBin keys in your Vercel settings, but failed to establish a secure database connection. Error details: <code className="bg-red-950/40 text-red-350 px-1.5 py-0.5 rounded font-mono border border-rose-900/40">{config.jsonBinError}</code>
+                  </>
+                ) : (
+                  <>
+                    Because Vercel serverless containers are stateless and reset periodically, any modifications you make (adding students, grades, or tests) will be <strong className="text-amber-300">lost on the next recycle</strong>. To activate dynamic syncing, configure <strong>JSONBin.io</strong> keys.
+                  </>
+                )}
               </p>
               <div className="text-[11px] text-neutral-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
                 <span className="flex items-center space-x-1">
-                  <span className="h-1 text-amber-400 font-bold">•</span>
+                  <span className="h-1 text-rose-400 font-bold">•</span>
                   <span>Set up a free JSON store on <a href="https://jsonbin.io" target="_blank" rel="noreferrer" className="text-purple-400 hover:underline">JSONBin.io</a></span>
                 </span>
                 <span className="flex items-center space-x-1">
-                  <span className="h-1 text-amber-400 font-bold">•</span>
-                  <span>Set <code>JSONBIN_API_KEY</code> & <code>JSONBIN_BIN_ID</code> in Vercel Project Settings</span>
+                  <span className="h-1 text-rose-400 font-bold">•</span>
+                  <span>Double check <code>JSONBIN_API_KEY</code> & <code>JSONBIN_BIN_ID</code> in Vercel Project Settings</span>
                 </span>
+                {config.jsonBinError && (
+                  <span className="flex items-center space-x-1">
+                    <span className="h-1 text-rose-400 font-bold">•</span>
+                    <strong className="text-rose-400">Important: Trigger a "Redeploy" in Vercel after editing keys!</strong>
+                  </span>
+                )}
               </div>
             </div>
           </div>
