@@ -349,9 +349,9 @@ async function saveDB(data: DBStructure): Promise<boolean> {
   return synced;
 }
 
-async function startServer() {
-  // Use express json parser
-  app.use(express.json());
+// Register middlewares and routes synchronously at the module level
+// Use express json parser
+app.use(express.json());
 
   // Log all API hits
   app.use((req, res, next) => {
@@ -913,31 +913,31 @@ async function startServer() {
     }
   });
 
-  // Vite Integration for Hot Middleware serving
-  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else if (!process.env.VERCEL) {
-    // In production, serve absolute path files containing bundled React SPA
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-  if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`[SERVER] Black Panther Test Tracker booted elegantly on port ${PORT}`);
-    });
-  }
+// Vite Integration for Hot Middleware serving
+if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+  (async () => {
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`[SERVER] Black Panther Test Tracker booted elegantly on port ${PORT}`);
+      });
+    } catch (err) {
+      console.error("[SERVER] Failed to start Vite dev server:", err);
+    }
+  })();
+} else if (!process.env.VERCEL) {
+  // In production, serve absolute path files containing bundled React SPA
+  const distPath = path.join(process.cwd(), "dist");
+  app.use(express.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[SERVER] Black Panther Test Tracker booted elegantly on port ${PORT}`);
+  });
 }
-
-// Initialise Server with safety guards
-startServer().catch((error) => {
-  console.error("[SERVER] Elegant boot crashed with setup error:", error);
-});
