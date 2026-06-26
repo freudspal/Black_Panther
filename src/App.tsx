@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   Cat,
   User,
@@ -61,6 +62,24 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<string>("landing"); // landing, student-dashboard, teacher-dashboard, leaderboard
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [systemMessage, setSystemMessage] = useState<Message | null>(null);
+  const [verifiedActions, setVerifiedActions] = useState<Array<{
+    id: string;
+    text: string;
+    type: "success" | "info" | "error";
+    timestamp: string;
+  }>>([]);
+  const [splashPulse, setSplashPulse] = useState<boolean>(false);
+  const [splashColor, setSplashColor] = useState<"emerald" | "purple" | "blue">("purple");
+
+  // Automatically retire verified actions after 5 seconds to keep the screen pristine
+  useEffect(() => {
+    if (verifiedActions.length > 0) {
+      const timer = setTimeout(() => {
+        setVerifiedActions(prev => prev.slice(0, prev.length - 1));
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [verifiedActions]);
   
   // Configuration fetched from backend
   const [config, setConfig] = useState<{
@@ -497,6 +516,24 @@ export default function App() {
     setTimeout(() => {
       setSystemMessage(null);
     }, 5000);
+
+    const id = Math.random().toString(36).substring(2, 9);
+    const date = new Date();
+    const timestamp = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    setVerifiedActions(prev => [{ id, text, type, timestamp }, ...prev].slice(0, 4));
+    
+    if (type === "success") {
+      setSplashColor("emerald");
+      setSplashPulse(true);
+      setTimeout(() => setSplashPulse(false), 800);
+    } else if (type === "info") {
+      setSplashColor("purple");
+      setSplashPulse(true);
+      setTimeout(() => setSplashPulse(false), 800);
+    } else {
+      setSplashColor("blue");
+    }
   };
 
   // Standard Authorisations
@@ -1336,7 +1373,7 @@ export default function App() {
                       <button
                         id="score-submit-btn"
                         type="submit"
-                        className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition active:scale-95"
+                        className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] active:bg-emerald-600 active:shadow-emerald-500/30 shadow-md cursor-pointer"
                       >
                         File Score Record
                       </button>
@@ -1785,7 +1822,7 @@ export default function App() {
                           <button
                             type="submit"
                             disabled={!bulkTextInput.trim()}
-                            className="w-full py-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition disabled:opacity-35 disabled:pointer-events-none active:scale-[98]"
+                            className="w-full py-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] active:bg-emerald-600 active:shadow-emerald-500/30 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
                           >
                             Execute Grades Import
                           </button>
@@ -1864,7 +1901,7 @@ export default function App() {
                           <button
                             type="submit"
                             disabled={!bulkTextInput.trim()}
-                            className="w-full py-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition disabled:opacity-35 disabled:pointer-events-none active:scale-[98]"
+                            className="w-full py-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] active:bg-emerald-600 active:shadow-emerald-500/30 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
                           >
                             Deploy Deployed Options
                           </button>
@@ -1946,7 +1983,7 @@ export default function App() {
                           <button
                             type="submit"
                             disabled={!bulkTextInput.trim()}
-                            className="w-full py-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition disabled:opacity-35 disabled:pointer-events-none active:scale-[98]"
+                            className="w-full py-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] active:bg-emerald-600 active:shadow-emerald-500/30 disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
                           >
                             Verify & Ingest Roster
                           </button>
@@ -2028,7 +2065,7 @@ export default function App() {
 
                         <button
                           type="submit"
-                          className="w-full py-2.5 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition active:scale-[98] shadow-md shadow-purple-900/10"
+                          className="w-full py-2.5 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] active:bg-emerald-600 active:shadow-emerald-500/30 shadow-md shadow-purple-900/10 cursor-pointer"
                         >
                           Submit Manual Grade Entry
                         </button>
@@ -2646,7 +2683,7 @@ export default function App() {
                 id="custom-confirm-cancel"
                 type="button"
                 onClick={() => setConfirmModalState(prev => ({ ...prev, isOpen: false }))}
-                className="px-4 py-2 text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-850 hover:border-neutral-750 rounded-xl transition duration-150 active:scale-95 cursor-pointer"
+                className="px-4 py-2 text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-900 border border-neutral-850 hover:border-neutral-750 rounded-xl transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
               >
                 Cancel
               </button>
@@ -2654,7 +2691,7 @@ export default function App() {
                 id="custom-confirm-approve"
                 type="button"
                 onClick={confirmModalState.onConfirm}
-                className="px-5 py-2 text-xs font-bold text-white bg-red-650 hover:bg-red-500 rounded-xl shadow-lg shadow-red-650/10 transition duration-150 active:scale-95 cursor-pointer"
+                className="px-5 py-2 text-xs font-bold text-white bg-red-650 hover:bg-red-500 rounded-xl shadow-lg shadow-red-650/10 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
               >
                 Proceed Operation
               </button>
@@ -2662,6 +2699,93 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Corner Action Verification HUD & Splash */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end space-y-3 pointer-events-none max-w-sm w-full">
+        {/* Visual Splash Ring Effect */}
+        <AnimatePresence>
+          {splashPulse && (
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 1.5, opacity: 0 }}
+              transition={{ duration: 0.6, ease: "easeOut" }}
+              className="absolute bottom-12 right-12 pointer-events-none flex items-center justify-center"
+            >
+              <div className={`absolute w-32 h-32 rounded-full border-2 ${
+                splashColor === "emerald" 
+                  ? "border-emerald-500/60 bg-emerald-500/5 shadow-[0_0_40px_rgba(16,185,129,0.25)]" 
+                  : splashColor === "purple"
+                  ? "border-purple-500/60 bg-purple-500/5 shadow-[0_0_40px_rgba(168,85,247,0.25)]"
+                  : "border-blue-500/60 bg-blue-500/5 shadow-[0_0_40px_rgba(59,130,246,0.25)]"
+              }`} />
+              <div className={`absolute w-12 h-12 rounded-full border ${
+                splashColor === "emerald" 
+                  ? "border-emerald-400/80 bg-emerald-500/10 shadow-[0_0_20px_rgba(16,185,129,0.4)]" 
+                  : splashColor === "purple"
+                  ? "border-purple-400/80 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.4)]"
+                  : "border-blue-400/80 bg-blue-500/10 shadow-[0_0_20px_rgba(59,130,246,0.4)]"
+              }`} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Stack of Verified Actions */}
+        <div className="space-y-2 w-full flex flex-col items-end">
+          <AnimatePresence>
+            {verifiedActions.map((action, idx) => (
+              <motion.div
+                key={action.id}
+                initial={{ opacity: 0, x: 50, y: 10, scale: 0.9 }}
+                animate={{ 
+                  opacity: idx === 0 ? 1 : 0.6, 
+                  x: 0, 
+                  y: 0, 
+                  scale: idx === 0 ? 1 : 0.95 - (idx * 0.02),
+                  zIndex: 50 - idx 
+                }}
+                exit={{ opacity: 0, x: 100, transition: { duration: 0.2 } }}
+                layout
+                className={`pointer-events-auto bg-[#030304]/95 border border-neutral-900/80 backdrop-blur-md rounded-2xl p-3 shadow-2xl flex items-start space-x-3 max-w-xs sm:max-w-sm border-l-4 w-full ${
+                  action.type === "success"
+                    ? "border-emerald-500/30 border-l-emerald-500 shadow-emerald-950/20"
+                    : action.type === "error"
+                    ? "border-rose-500/30 border-l-rose-500 shadow-rose-950/20"
+                    : "border-purple-500/30 border-l-purple-500 shadow-purple-950/20"
+                }`}
+              >
+                <div className="shrink-0 mt-0.5">
+                  {action.type === "success" && (
+                    <div className="w-5 h-5 rounded-full bg-emerald-500/15 flex items-center justify-center border border-emerald-500/30">
+                      <CheckCircle className="w-3 h-3 text-emerald-400" />
+                    </div>
+                  )}
+                  {action.type === "error" && (
+                    <div className="w-5 h-5 rounded-full bg-rose-500/15 flex items-center justify-center border border-rose-500/30">
+                      <AlertTriangle className="w-3 h-3 text-rose-400" />
+                    </div>
+                  )}
+                  {action.type === "info" && (
+                    <div className="w-5 h-5 rounded-full bg-purple-500/15 flex items-center justify-center border border-purple-500/30">
+                      <Clock className="w-3 h-3 text-purple-400 animate-spin" style={{ animationDuration: "3s" }} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[8px] font-mono font-bold tracking-widest text-neutral-400 uppercase">
+                      {action.type === "success" ? "✓ SECURE LEDGER SAVED" : action.type === "error" ? "⚠ SECURITY SYSTEM ALERT" : "🛈 STEALTH STATUS"}
+                    </span>
+                    <span className="text-[8px] font-mono text-neutral-500">{action.timestamp}</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-200 leading-snug font-sans font-medium">{action.text}</p>
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      </div>
 
     </div>
   );
