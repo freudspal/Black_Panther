@@ -50,3 +50,20 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #442a78;
 }
+
+@keyframes log-sweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.log-flash {
+  background: linear-gradient(90deg, transparent, rgba(168, 85, 247, 0.25), rgba(129, 140, 248, 0.25), transparent);
+  background-size: 200% 100%;
+  animation: log-sweep 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  border-radius: 8px;
+}
+

@@ -1,5 +1,7 @@
-import { Cat, LogOut, Shield, Award, User, RefreshCw } from "lucide-react";
+import { LogOut, Shield, Award, User } from "lucide-react";
 import { motion } from "motion/react";
+// @ts-ignore
+import pantherLogo from "../assets/images/panther_logo_1782473515224.jpg";
 
 interface HeaderProps {
   user: {
@@ -32,8 +34,13 @@ export default function Header({
         <div className="flex h-20 items-center justify-between">
           {/* Brand/Logo Section */}
           <div className="flex items-center space-x-3">
-            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-purple-600 to-indigo-900 shadow-lg shadow-purple-500/10">
-              <Cat className="h-6 w-6 text-purple-200" />
+            <div className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-neutral-900 overflow-hidden border border-purple-950">
+              <img
+                src={pantherLogo}
+                alt="Black Panther"
+                className="h-full w-full object-cover rounded-xl"
+                referrerPolicy="no-referrer"
+              />
               {/* Outer glow ring representing panther stealth */}
               <span className="absolute -inset-0.5 rounded-xl bg-purple-500/20 blur opacity-30 animate-pulse"></span>
             </div>
@@ -107,27 +114,7 @@ export default function Header({
 
           {/* Right Action / Status Area */}
           <div className="flex items-center space-x-3">
-            {/* Database Sync Badge */}
-            <div className="hidden sm:flex items-center space-x-1.5 rounded-full bg-neutral-900 border border-neutral-800 px-3 py-1 text-[10px]">
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  config.hasSupabase ? "bg-emerald-500 animate-pulse" : "bg-purple-400"
-                }`}
-              ></span>
-              <span className="font-mono text-neutral-400">
-                {config.hasSupabase ? "Sync: Supabase" : "Local Database"}
-              </span>
-              <button
-                onClick={onRefresh}
-                disabled={isRefreshing}
-                className="text-neutral-500 hover:text-purple-400 transition ml-1"
-                title="Sync database changes"
-              >
-                <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
-              </button>
-            </div>
-
-            {user ? (
+            {user && (
               <div className="flex items-center space-x-3 pl-2 border-l border-neutral-800">
                 <div className="hidden lg:block text-right">
                   <p className="text-xs font-semibold text-white truncate max-w-[120px]">
@@ -140,16 +127,12 @@ export default function Header({
                 <button
                   id="header-logout-btn"
                   onClick={onLogout}
-                  className="flex items-center space-x-1.5 bg-purple-950/80 text-purple-300 hover:bg-purple-900 hover:text-purple-200 border border-purple-800/40 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-md active:scale-95"
+                  className="flex items-center space-x-1.5 bg-purple-950/80 text-purple-300 hover:bg-purple-900 hover:text-purple-200 border border-purple-800/40 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shadow-md active:scale-95 animate-in fade-in"
                   title="Logout safely"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Logout</span>
                 </button>
-              </div>
-            ) : (
-              <div className="text-xs font-mono text-neutral-500 px-2 py-1 bg-neutral-900 rounded-lg">
-                Stealth Ingress Mode
               </div>
             )}
           </div>

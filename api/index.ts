@@ -574,8 +574,6 @@ app.get("/api/config-status", async (req, res) => {
     hasSupabase: isUsingSupabase,
     supabaseUrl: process.env.SUPABASE_URL || null,
     supabaseError: lastSupabaseError,
-    defaultTeacherUsername: hasCustomTeacherCreds ? "********" : teacherUsername,
-    defaultTeacherPassword: hasCustomTeacherCreds ? "********" : teacherPassword,
     isCustomTeacherConfigured: hasCustomTeacherCreds
   });
 });
@@ -673,17 +671,16 @@ app.post("/api/auth/teacher-login", async (req, res) => {
       const hasCustomUsername = !!process.env.TEACHER_USERNAME;
       const hasCustomPassword = !!process.env.TEACHER_PASSWORD;
       
-      let errMsg = "Access Denied. Credentials do not match Vercel environment variables.";
+      let errMsg = "Access Denied. Credentials do not match the configured teacher account.";
       if (!hasCustomUsername || !hasCustomPassword) {
-        errMsg += " Note: Vercel environment secrets (TEACHER_USERNAME/TEACHER_PASSWORD) were not detected, so the app is currently using the default fallbacks (admin / panther2026). If you just added them in Vercel settings, please make sure to trigger a full 'Redeploy' of your project in Vercel so they can take effect!";
+        errMsg += " Ensure TEACHER_USERNAME and TEACHER_PASSWORD are properly set in your environment variables.";
       }
 
       res.status(401).json({ 
         error: errMsg,
         diagnostics: {
           hasCustomUsernameEnv: hasCustomUsername,
-          hasCustomPasswordEnv: hasCustomPassword,
-          defaultFallbackUsed: !hasCustomUsername || !hasCustomPassword
+          hasCustomPasswordEnv: hasCustomPassword
         }
       });
     }

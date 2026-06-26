@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Cat,
@@ -33,6 +33,9 @@ import {
   Area,
   LineChart,
   Line,
+  BarChart,
+  Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -42,6 +45,8 @@ import {
 } from "recharts";
 import Header from "./components/Header";
 import { TestTemplate, Student, ScoreEntry, TeacherDashboardMetrics } from "./types";
+// @ts-ignore
+import pantherLogo from "./assets/images/panther_logo_1782473515224.jpg";
 
 interface Message {
   text: string;
@@ -60,6 +65,8 @@ export default function App() {
 
   // General App states
   const [currentPage, setCurrentPage] = useState<string>("landing"); // landing, student-dashboard, teacher-dashboard, leaderboard
+  const [flashLog, setFlashLog] = useState<boolean>(false);
+  const flashTimeoutRef = useRef<any>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [systemMessage, setSystemMessage] = useState<Message | null>(null);
   const [verifiedActions, setVerifiedActions] = useState<Array<{
@@ -68,32 +75,17 @@ export default function App() {
     type: "success" | "info" | "error";
     timestamp: string;
   }>>([]);
-  const [splashPulse, setSplashPulse] = useState<boolean>(false);
-  const [splashColor, setSplashColor] = useState<"emerald" | "purple" | "blue">("purple");
-
-  // Automatically retire verified actions after 5 seconds to keep the screen pristine
-  useEffect(() => {
-    if (verifiedActions.length > 0) {
-      const timer = setTimeout(() => {
-        setVerifiedActions(prev => prev.slice(0, prev.length - 1));
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [verifiedActions]);
+  const [rosterSearch, setRosterSearch] = useState<string>("");
   
   // Configuration fetched from backend
   const [config, setConfig] = useState<{
     hasSupabase: boolean;
     supabaseUrl: string | null;
     supabaseError: string | null;
-    defaultTeacherUsername: string;
-    defaultTeacherPassword: string;
   }>({
     hasSupabase: false,
     supabaseUrl: null,
     supabaseError: null,
-    defaultTeacherUsername: "admin",
-    defaultTeacherPassword: "panther2026",
   });
 
   // Authentic input states
@@ -129,6 +121,8 @@ export default function App() {
 
   // Analytical graph and security states
   const [teacherChartTab, setTeacherChartTab] = useState<"whole" | "groups" | "student">("whole");
+  const [chartDisplayMode, setChartDisplayMode] = useState<"chronological" | "single_test">("chronological");
+  const [selectedChartTestId, setSelectedChartTestId] = useState<string>("");
   const [selectedChartStudent, setSelectedChartStudent] = useState<string>("");
   const [studentNeedsPasswordChange, setStudentNeedsPasswordChange] = useState<boolean>(false);
   const [currentPasswordForChange, setCurrentPasswordForChange] = useState<string>("");
@@ -225,7 +219,7 @@ export default function App() {
   const handleAssessmentImport = async (textToParse: string) => {
     const lines = textToParse.split(/\r?\n/).filter(line => line.trim().length > 0);
     if (lines.length < 2) {
-      showNotification("Provide headers and at least one assessment template row.", "error");
+      showNotification("Please provide headers and at least one assessment row.", "error");
       return;
     }
     const delimiter = lines[0].includes("\t") ? "\t" : ",";
@@ -271,14 +265,14 @@ export default function App() {
         showNotification(data.error || "Failed to import assessment templates.", "error");
       }
     } catch (_) {
-      showNotification("Network delay during template import.", "error");
+      showNotification("Network error during template import.", "error");
     }
   };
 
   const handleStudentsImport = async (textToParse: string) => {
     const lines = textToParse.split(/\r?\n/).filter(line => line.trim().length > 0);
     if (lines.length < 2) {
-      showNotification("Provide headers and at least one student row.", "error");
+      showNotification("Please provide headers and at least one student row.", "error");
       return;
     }
     const delimiter = lines[0].includes("\t") ? "\t" : ",";
@@ -311,7 +305,7 @@ export default function App() {
     }
 
     try {
-      showNotification("Uploading student roster preloads...", "info");
+      showNotification("Uploading student list...", "info");
       const r = await fetch("/api/teacher/import-students", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -323,22 +317,22 @@ export default function App() {
         setBulkTextInput("");
         syncApplicationData();
       } else {
-        showNotification(data.error || "Failed to preload students list.", "error");
+        showNotification(data.error || "Failed to import student list.", "error");
       }
     } catch (_) {
-      showNotification("Network delay during student preload.", "error");
+      showNotification("Network error during student import.", "error");
     }
   };
 
   const handleBulkImport = async (textToParse: string) => {
     const records = processExcelCSVData(textToParse);
     if (records.length === 0) {
-      showNotification("No valid student score rows detected in columns formatting.", "error");
+      showNotification("No valid student score rows found in columns.", "error");
       return;
     }
 
     try {
-      showNotification("Uploading bulk spreadsheet data records...", "info");
+      showNotification("Uploading spreadsheet scores...", "info");
       const response = await fetch("/api/teacher/bulk-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -351,10 +345,10 @@ export default function App() {
         setBulkTextInput("");
         syncApplicationData();
       } else {
-        showNotification(data.error || "Failed to process database bulk ingestion.", "error");
+        showNotification(data.error || "Failed to process bulk import.", "error");
       }
     } catch (_) {
-      showNotification("Network delay during bulk ingest process.", "error");
+      showNotification("Network error during bulk score upload.", "error");
     }
   };
 
@@ -388,12 +382,12 @@ export default function App() {
   const handleTeacherManualEntry = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualStudentUsername || !manualTestId || !manualScoreRaw || !manualScoreDate) {
-      showNotification("Please supply student name, template, date and secured score.", "error");
+      showNotification("Please select a student, assessment, date, and enter a score.", "error");
       return;
     }
 
     try {
-      showNotification("Logging manual score registry...", "info");
+      showNotification("Logging score...", "info");
       const response = await fetch("/api/scores", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -407,7 +401,7 @@ export default function App() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        showNotification(`Successfully logged manual database registry score for "${manualStudentUsername}".`, "success");
+        showNotification(`Successfully logged score for "${manualStudentUsername}".`, "success");
         setManualStudentUsername("");
         setManualScoreRaw("");
         syncApplicationData();
@@ -415,7 +409,7 @@ export default function App() {
         showNotification(data.error || "Failed to record manually entered marks.", "error");
       }
     } catch (_) {
-      showNotification("Server offline during score filing.", "error");
+      showNotification("Server error during score filing.", "error");
     }
   };
 
@@ -453,8 +447,6 @@ export default function App() {
             hasSupabase: data.hasSupabase,
             supabaseUrl: data.supabaseUrl,
             supabaseError: data.supabaseError || null,
-            defaultTeacherUsername: data.defaultTeacherUsername,
-            defaultTeacherPassword: data.defaultTeacherPassword,
           });
         }
       })
@@ -464,8 +456,8 @@ export default function App() {
   // Sync / Refresh helper
   const syncApplicationData = async () => {
     setIsRefreshing(true);
-    const databaseType = config.hasSupabase ? "Supabase SQL Vault" : "local cache";
-    showNotification(`Syncing live panthers vault with ${databaseType}...`, "info");
+    const databaseType = config.hasSupabase ? "Supabase database" : "local cache";
+    showNotification(`Syncing data with ${databaseType}...`, "info");
     try {
       if (currentUser) {
         const timestamp = Date.now();
@@ -496,9 +488,9 @@ export default function App() {
           }
         }
       }
-      showNotification("Stealth systems synchronized successfully.", "success");
+      showNotification("Data synchronized successfully.", "success");
     } catch (err) {
-      showNotification("Connection delay during sync. Retrying over local caches.", "error");
+      showNotification("Connection delay during sync. Retrying with local data.", "error");
     } finally {
       setIsRefreshing(false);
     }
@@ -511,29 +503,40 @@ export default function App() {
     }
   }, [currentUser]);
 
+  // Auto-initialize selected chart student when teacher data is loaded
+  useEffect(() => {
+    if (currentUser?.role === "teacher") {
+      if (teacherData?.students && teacherData.students.length > 0) {
+        if (!selectedChartStudent || !teacherData.students.some(s => s.username === selectedChartStudent)) {
+          setSelectedChartStudent(teacherData.students[0].username);
+        }
+      }
+      if (teacherData?.tests && teacherData.tests.length > 0) {
+        if (!selectedChartTestId || !teacherData.tests.some(t => t.id === selectedChartTestId)) {
+          setSelectedChartTestId(teacherData.tests[0].id);
+        }
+      }
+    }
+  }, [teacherData, selectedChartStudent, selectedChartTestId, currentUser]);
+
   const showNotification = (text: string, type: "success" | "error" | "info") => {
     setSystemMessage({ text, type });
+    setFlashLog(false);
+    if (flashTimeoutRef.current) {
+      clearTimeout(flashTimeoutRef.current);
+    }
     setTimeout(() => {
-      setSystemMessage(null);
-    }, 5000);
+      setFlashLog(true);
+      flashTimeoutRef.current = setTimeout(() => {
+        setFlashLog(false);
+      }, 1000);
+    }, 20);
 
     const id = Math.random().toString(36).substring(2, 9);
     const date = new Date();
     const timestamp = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
-    setVerifiedActions(prev => [{ id, text, type, timestamp }, ...prev].slice(0, 4));
-    
-    if (type === "success") {
-      setSplashColor("emerald");
-      setSplashPulse(true);
-      setTimeout(() => setSplashPulse(false), 800);
-    } else if (type === "info") {
-      setSplashColor("purple");
-      setSplashPulse(true);
-      setTimeout(() => setSplashPulse(false), 800);
-    } else {
-      setSplashColor("blue");
-    }
+    setVerifiedActions(prev => [{ id, text, type, timestamp }, ...prev].slice(0, 10));
   };
 
   // Standard Authorisations
@@ -541,7 +544,7 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginUsername || !loginPassword) {
-      showNotification("Please provide both stealth credentials.", "error");
+      showNotification("Please enter both username and password.", "error");
       return;
     }
 
@@ -566,42 +569,42 @@ export default function App() {
           setStudentNeedsPasswordChange(true);
         }
         setCurrentPage(isTeacher ? "teacher-dashboard" : "student-dashboard");
-        showNotification(`Welcome back, ${isTeacher ? "Alpha Director" : `Agent ${data.user.nickname}`}! Secure connection established.`, "success");
+        showNotification(`Welcome back, ${data.user.nickname}!`, "success");
         // Clear login form
         setLoginUsername("");
         setLoginPassword("");
       } else {
-        showNotification(data.error || "Access denied. Credentials do not match.", "error");
+        showNotification(data.error || "Access denied. Username or password does not match.", "error");
       }
     } catch (err) {
-      showNotification("Network failed during authorization pipeline.", "error");
+      showNotification("Network connection error during login.", "error");
     }
   };
 
   const logoutUser = () => {
     setCurrentUser(null);
     setCurrentPage("landing");
-    showNotification("Stealth session terminated. Security protocols restored.", "info");
+    showNotification("You have been logged out.", "info");
   };
 
   const handleChangePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
     if (!currentPasswordForChange || !newPasswordForChange || !confirmPasswordForChange) {
-      showNotification("Please fill in all security parameter credentials.", "error");
+      showNotification("Please fill in all password fields.", "error");
       return;
     }
     if (newPasswordForChange !== confirmPasswordForChange) {
-      showNotification("New password confirming parameters do not match.", "error");
+      showNotification("The passwords entered do not match.", "error");
       return;
     }
     if (newPasswordForChange.length < 4) {
-      showNotification("New security credential must be at least 4 characters long.", "error");
+      showNotification("The new password must be at least 4 characters long.", "error");
       return;
     }
 
     try {
-      showNotification("Transmitting secure credential synchronization...", "info");
+      showNotification("Updating password...", "info");
       const response = await fetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -614,17 +617,17 @@ export default function App() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        showNotification("Security credentials upgraded successfully. Secure connection intact.", "success");
+        showNotification("Password updated successfully.", "success");
         setStudentNeedsPasswordChange(false);
         // Clear state fields
         setCurrentPasswordForChange("");
         setNewPasswordForChange("");
         setConfirmPasswordForChange("");
       } else {
-        showNotification(data.error || "Password update refused by server encryption guards.", "error");
+        showNotification(data.error || "Password update failed.", "error");
       }
     } catch (_) {
-      showNotification("Network delay during key rotation protocol.", "error");
+      showNotification("Network error during password update.", "error");
     }
   };
 
@@ -633,7 +636,7 @@ export default function App() {
     e.preventDefault();
     if (!currentUser) return;
     if (!selectedTestId || !studentScoreRaw) {
-      showNotification("Choose a test and enter your score.", "error");
+      showNotification("Please select an assessment and enter your score.", "error");
       return;
     }
 
@@ -642,7 +645,7 @@ export default function App() {
 
     const rawVal = parseFloat(studentScoreRaw);
     if (isNaN(rawVal) || rawVal < 0 || rawVal > testTemplate.maxScore) {
-      showNotification(`Score must be a positive number up to the maximum parameter (${testTemplate.maxScore}).`, "error");
+      showNotification(`Score must be a positive number up to ${testTemplate.maxScore}.`, "error");
       return;
     }
 
@@ -664,39 +667,38 @@ export default function App() {
         setStudentScoreRaw("");
         syncApplicationData();
       } else {
-        showNotification(data.error || "Submission rejected by central databases.", "error");
+        showNotification(data.error || "Submission failed.", "error");
       }
     } catch (err) {
-      showNotification("Data pipeline stalled. Please check connections.", "error");
+      showNotification("Network connection error. Please try again.", "error");
     }
   };
 
   // Handle Score Deletion (Student side)
   const handleScoreDelete = (scoreId: string) => {
     requestConfirm(
-      "Retract Score Submission",
-      "Are you sure you want to retract this grade score? This changes your statistics!",
+      "Delete Score Submission",
+      "Are you sure you want to delete this score? This will update your statistics.",
       async () => {
         try {
           const response = await fetch(`/api/scores/${scoreId}`, {
             method: "DELETE"
           });
           if (response.ok) {
-            showNotification("Test score revoked.", "success");
+            showNotification("Score deleted successfully.", "success");
             syncApplicationData();
           }
         } catch (err) {
-          showNotification("Failed to revoke score. Connection issue.", "error");
+          showNotification("Failed to delete score. Connection issue.", "error");
         }
       }
     );
   };
 
-  // Create Test Template (Teacher action)
   const handleCreateTestTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTestName || !newTestMaxScore) {
-      showNotification("Provide assessment label and max possible marks.", "error");
+      showNotification("Please provide an assessment name and maximum marks.", "error");
       return;
     }
 
@@ -718,34 +720,33 @@ export default function App() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        showNotification(`Assessment "${data.test.name}" released to databases.`, "success");
+        showNotification(`Assessment "${data.test.name}" created successfully.`, "success");
         setNewTestName("");
         setNewTestMaxScore("50");
         syncApplicationData();
       } else {
-        showNotification(data.error || "Database declined new test declaration.", "error");
+        showNotification(data.error || "Failed to create assessment.", "error");
       }
     } catch (err) {
-      showNotification("Connection lost. Test templating failed.", "error");
+      showNotification("Network connection error. Failed to create assessment.", "error");
     }
   };
 
-  // Delete Test Template (Teacher action)
   const handleDeleteTestTemplate = (id: string, name: string) => {
     requestConfirm(
-      "Purge Assessment Template",
-      `WARNING: Deleting test template "${name}" will permanently erase ALL student grades submitted under this assessment. Proceed?`,
+      "Delete Assessment",
+      `Are you sure you want to permanently delete the assessment "${name}" and all associated student scores?`,
       async () => {
         try {
           const response = await fetch(`/api/tests/${id}`, {
             method: "DELETE"
           });
           if (response.ok) {
-            showNotification("Assessment template and dependent grades purged.", "success");
+            showNotification("Assessment and associated scores deleted.", "success");
             syncApplicationData();
           }
         } catch (e) {
-          showNotification("Purging failure. Central system issues.", "error");
+          showNotification("Failed to delete assessment.", "error");
         }
       }
     );
@@ -754,8 +755,8 @@ export default function App() {
   // Delete Student (Teacher action)
   const handleDeleteStudent = (username: string, nickname: string) => {
     requestConfirm(
-      "Purge Student Profile",
-      `WARNING: Deleting student "${nickname}" (${username}) will permanently erase their profile and ALL logged score records. Proceed?`,
+      "Delete Student Profile",
+      `Are you sure you want to permanently delete student "${nickname}" and all of their logged scores?`,
       async () => {
         try {
           const response = await fetch("/api/teacher/delete-student", {
@@ -765,22 +766,21 @@ export default function App() {
           });
           const data = await response.json();
           if (response.ok && data.success) {
-            showNotification(`Student "${nickname}" and matching records purged successfully.`, "success");
+            showNotification(`Student "${nickname}" deleted successfully.`, "success");
             if (selectedStudentDrilldown === username) {
               setSelectedStudentDrilldown(null);
             }
             syncApplicationData();
           } else {
-            showNotification(data.error || "Failed to purge student profile.", "error");
+            showNotification(data.error || "Failed to delete student profile.", "error");
           }
         } catch (_) {
-          showNotification("Purging failure. Central connection issues.", "error");
+          showNotification("Network error. Failed to delete student profile.", "error");
         }
       }
     );
   };
 
-  // Reassign student group (Teacher action)
   const handleReassignStudentGroup = async (username: string, classGroup: string, nickname: string) => {
     try {
       const response = await fetch("/api/teacher/reassign-student-group", {
@@ -790,13 +790,13 @@ export default function App() {
       });
       const data = await response.json();
       if (response.ok && data.success) {
-        showNotification(`Reassigned "${nickname}" to Group ${classGroup}.`, "success");
+        showNotification(`Successfully reassigned "${nickname}" to Group ${classGroup}.`, "success");
         syncApplicationData();
       } else {
         showNotification(data.error || "Failed to reassign student group.", "error");
       }
     } catch (_) {
-      showNotification("Reassignment offline connection error.", "error");
+      showNotification("Network error while reassigning student group.", "error");
     }
   };
 
@@ -968,25 +968,54 @@ export default function App() {
     };
   }).filter(item => item["Student Performance %"] !== null);
 
+  // 4. Single assessment focus calculations
+  const selectedChartTest = (teacherData?.tests || []).find(t => t.id === selectedChartTestId);
+  const selectedChartTestName = selectedChartTest ? selectedChartTest.name : "Selected Assessment";
+
+  // Single test whole group performance
+  const singleTestWholeGroupData = (teacherData?.students || []).map(student => {
+    const scoreNode = (teacherData?.scores || []).find(s => s.testId === selectedChartTestId && s.studentUsername === student.username);
+    return {
+      name: student.nickname || student.username,
+      "Score %": scoreNode ? scoreNode.percentage : 0,
+    };
+  }).sort((a, b) => b["Score %"] - a["Score %"]);
+
+  // Single test compare groups
+  const singleTestGroupsData = ["A", "B", "C", "D", "E"].map(g => {
+    const groupScores = (teacherData?.scores || []).filter(s => s.testId === selectedChartTestId && s.classGroup === g);
+    const avg = groupScores.length > 0 
+      ? parseFloat((groupScores.reduce((sum, curr) => sum + curr.percentage, 0) / groupScores.length).toFixed(1)) 
+      : 0;
+    return {
+      groupName: `Group ${g}`,
+      "Group Average %": avg,
+    };
+  });
+
+  // Single test student comparison
+  const singleTestStudentCompareData = (() => {
+    const studentObj = (teacherData?.students || []).find(s => s.username === selectedChartStudent);
+    const sGroup = studentObj?.classGroup || "A";
+    const scoreNode = (teacherData?.scores || []).find(s => s.testId === selectedChartTestId && s.studentUsername === selectedChartStudent);
+    const groupScores = (teacherData?.scores || []).filter(s => s.testId === selectedChartTestId && s.classGroup === sGroup);
+    const groupAvg = groupScores.length > 0 
+      ? parseFloat((groupScores.reduce((sum, curr) => sum + curr.percentage, 0) / groupScores.length).toFixed(1)) 
+      : 0;
+    const allScores = (teacherData?.scores || []).filter(s => s.testId === selectedChartTestId);
+    const cohortAvg = allScores.length > 0 
+      ? parseFloat((allScores.reduce((sum, curr) => sum + curr.percentage, 0) / allScores.length).toFixed(1)) 
+      : 0;
+    return [
+      { category: studentObj ? (studentObj.nickname || studentObj.username) : "Student", "Performance %": scoreNode ? scoreNode.percentage : 0 },
+      { category: `Group ${sGroup} Avg`, "Performance %": groupAvg },
+      { category: "Cohort Avg", "Performance %": cohortAvg }
+    ];
+  })();
+
   return (
     <div className="min-h-screen bg-[#050506] text-neutral-200 flex flex-col font-sans transition-all selection:bg-purple-600/30 selection:text-purple-300">
       
-      {/* Dynamic Alert Banner */}
-      {systemMessage && (
-        <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 flex items-start sm:items-center space-x-3 px-5 py-3.5 rounded-xl border backdrop-blur-md shadow-2xl transition-all duration-300 w-[calc(100%-2rem)] max-w-lg sm:max-w-xl md:max-w-2xl ${
-          systemMessage.type === "success"
-            ? "bg-emerald-950/90 text-emerald-200 border-emerald-500/40"
-            : systemMessage.type === "error"
-            ? "bg-rose-950/90 text-rose-200 border-rose-500/40"
-            : "bg-purple-950/90 text-purple-200 border-purple-500/40"
-        }`}>
-          {systemMessage.type === "success" && <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />}
-          {systemMessage.type === "error" && <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5 sm:mt-0" />}
-          {systemMessage.type === "info" && <Cat className="w-5 h-5 text-purple-400 shrink-0 animate-bounce mt-0.5 sm:mt-0" />}
-          <span className="text-xs sm:text-sm font-medium leading-relaxed break-words flex-1">{systemMessage.text}</span>
-        </div>
-      )}
-
       {studentNeedsPasswordChange && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/85 backdrop-blur-xl animate-fade-in text-neutral-100">
           <div className="w-full max-w-md bg-neutral-900 border border-purple-950 rounded-3xl p-6 sm:p-8 shadow-2xl relative space-y-6">
@@ -1063,51 +1092,6 @@ export default function App() {
 
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        {/* Offline or Error Warning Banner for Stateless Production Vercel Deployments */}
-        {(!config.hasSupabase || config.supabaseError) && (
-          <div className="mb-6 bg-rose-950/15 border border-rose-900/60 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start space-y-3 sm:space-y-0 sm:space-x-4 shadow-xl shadow-rose-950/5 animate-in fade-in duration-300">
-            <div className="p-2.5 bg-rose-950/65 rounded-xl border border-rose-900/50 text-rose-400 shrink-0">
-              <AlertTriangle className="w-5 h-5 animate-pulse" />
-            </div>
-            <div className="flex-1 space-y-1.5">
-              <h4 className="text-sm font-bold text-white tracking-tight flex items-center space-x-1.5">
-                <span>
-                  {config.supabaseError
-                    ? "Supabase Database Connection Failed"
-                    : "Cloud Database Sync is Offline (Ephemeral Storage)"}
-                </span>
-                <span className={`px-2 py-0.5 text-[9px] font-mono rounded-md uppercase font-bold tracking-wider ${config.supabaseError ? 'bg-red-950/80 text-rose-350 border border-red-900/40' : 'bg-amber-900/40 text-amber-350'}`}>
-                  {config.supabaseError ? 'Sync Error' : 'Storage Warning'}
-                </span>
-              </h4>
-              <p className="text-xs text-neutral-400 leading-relaxed max-w-4xl">
-                {config.supabaseError ? (
-                  <>
-                    The application detected Supabase settings, but failed to connect. Ensure your tables <code>students</code>, <code>tests</code>, and <code>scores</code> are created in Supabase with correct privileges. Error details: <code className="bg-red-950/40 text-red-350 px-1.5 py-0.5 rounded font-mono border border-rose-900/40">{config.supabaseError}</code>
-                  </>
-                ) : (
-                  <>
-                    Because serverless containers are stateless and reset periodically, any modifications you make (adding students, grades, or tests) will be <strong className="text-amber-300">lost on the next recycle</strong>. To activate dynamic syncing, configure your <strong>Supabase</strong> database in your Vercel Environment Variables.
-                  </>
-                )}
-              </p>
-              <div className="text-[11px] text-neutral-500 pt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-                {!config.hasSupabase ? (
-                  <span className="flex items-center space-x-1">
-                    <span className="h-1 text-rose-400 font-bold">•</span>
-                    <span>Configure <code>SUPABASE_URL</code> & <code>SUPABASE_KEY</code> on Vercel</span>
-                  </span>
-                ) : (
-                  <span className="flex items-center space-x-1">
-                    <span className="h-1 text-rose-400 font-bold">•</span>
-                    <strong className="text-rose-400">Important: Trigger a "Redeploy" in Vercel after editing env variables!</strong>
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-        
         {/* LANDING / REGISTRATION ENTRANCE */}
         {currentPage === "landing" && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center py-6 sm:py-12">
@@ -1115,32 +1099,127 @@ export default function App() {
             {/* Visual Branding Section */}
             <div className="col-span-1 lg:col-span-7 flex flex-col justify-center space-y-6">
               
-              <h1 className="font-display text-4xl sm:text-6xl font-extrabold tracking-tight text-white leading-tight text-center lg:text-left">
-                Evaluate Stealth.<br />
-                <span className="bg-gradient-to-r from-purple-400 via-violet-300 to-indigo-500 bg-clip-text text-transparent">
-                  Black Panther Tracker
-                </span>
-              </h1>
+              <div className="bg-neutral-950/60 rounded-3xl p-6 sm:p-8 border border-purple-950/60 shadow-2xl relative overflow-hidden flex flex-col min-h-[300px] justify-between">
+                
+                {/* Background Grid & SVG Line Graph - Absolutely Positioned */}
+                <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
+                  {/* Background Grid */}
+                  <div className="absolute inset-0 grid grid-cols-6 grid-rows-4 opacity-20">
+                    {Array.from({ length: 24 }).map((_, i) => (
+                      <div key={i} className="border-r border-b border-purple-950/10"></div>
+                    ))}
+                  </div>
+                  
+                  {/* SVG Line Graph */}
+                  <svg className="w-full h-full" viewBox="0 0 500 160" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id="purpleGlow" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#a855f7" stopOpacity="0.1" />
+                        <stop offset="50%" stopColor="#818cf8" stopOpacity="0.75" />
+                        <stop offset="100%" stopColor="#c084fc" stopOpacity="0.1" />
+                      </linearGradient>
+                      <linearGradient id="emeraldGlow" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#10b981" stopOpacity="0.1" />
+                        <stop offset="50%" stopColor="#34d399" stopOpacity="0.75" />
+                        <stop offset="100%" stopColor="#059669" stopOpacity="0.1" />
+                      </linearGradient>
+                      <linearGradient id="roseGlow" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#f43f5e" stopOpacity="0.1" />
+                        <stop offset="50%" stopColor="#fb7185" stopOpacity="0.75" />
+                        <stop offset="100%" stopColor="#e11d48" stopOpacity="0.1" />
+                      </linearGradient>
+                    </defs>
 
-              {/* Conversion Rules Preview */}
-              <div className="bg-neutral-950/55 rounded-3xl p-6 border border-purple-950/60 max-w-lg mx-auto lg:mx-0 shadow-xl shadow-purple-500/[0.03]">
-                <h3 className="text-xs font-bold tracking-widest text-[#a855f7] font-mono uppercase mb-4 flex items-center justify-center lg:justify-start space-x-1">
-                  <Info className="w-4 h-4 text-[#a855f7]" />
-                  <span>Interactive Academic Boundaries</span>
-                </h3>
-                <div className="grid grid-cols-4 sm:grid-cols-7 gap-3 text-center">
-                  {gradeBoundaries.map((g) => (
-                    <div
-                      key={g.name}
-                      className="p-1.5 rounded-xl border border-neutral-900 bg-neutral-950 flex flex-col items-center"
-                    >
-                      <span className={`text-base font-bold ${g.color.split(" ")[0]}`}>{g.name}</span>
-                      <span className="font-mono text-[9px] text-neutral-500">≥{g.min}%</span>
+                    {/* Trajectory lines */}
+                    <path
+                      d="M 10 130 Q 120 40, 250 110 T 490 20"
+                      fill="none"
+                      stroke="url(#purpleGlow)"
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      className="opacity-90 animate-pulse"
+                    />
+                    <path
+                      d="M 10 100 Q 140 140, 240 60 T 490 45"
+                      fill="none"
+                      stroke="url(#emeraldGlow)"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      className="opacity-80"
+                    />
+                    <path
+                      d="M 10 145 Q 100 80, 260 145 T 490 95"
+                      fill="none"
+                      stroke="url(#roseGlow)"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      className="opacity-70"
+                    />
+
+                    {/* Small glowing coordinates */}
+                    <circle cx="250" cy="110" r="4.5" fill="#818cf8" />
+                    <circle cx="240" cy="60" r="4.5" fill="#34d399" />
+                    <circle cx="490" cy="20" r="5.5" fill="#c084fc" />
+
+                    {/* Animated dots moving along the lines */}
+                    <g>
+                      <animateMotion
+                        path="M 10 130 Q 120 40, 250 110 T 490 20"
+                        dur="7s"
+                        repeatCount="indefinite"
+                      />
+                      <circle r="8" fill="#a855f7" opacity="0.35" />
+                      <circle r="4" fill="#a855f7" />
+                    </g>
+                    <g>
+                      <animateMotion
+                        path="M 10 100 Q 140 140, 240 60 T 490 45"
+                        dur="9s"
+                        repeatCount="indefinite"
+                      />
+                      <circle r="7" fill="#10b981" opacity="0.35" />
+                      <circle r="3.5" fill="#10b981" />
+                    </g>
+                    <g>
+                      <animateMotion
+                        path="M 10 145 Q 100 80, 260 145 T 490 95"
+                        dur="8s"
+                        repeatCount="indefinite"
+                      />
+                      <circle r="6" fill="#f43f5e" opacity="0.35" />
+                      <circle r="3" fill="#f43f5e" />
+                    </g>
+                  </svg>
+                </div>
+
+                {/* Relative Content Container */}
+                <div className="relative z-10 space-y-6 flex-1 flex flex-col justify-between">
+                  {/* Title and subtitle */}
+                  <div className="text-center lg:text-left">
+                    <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tight text-white leading-tight">
+                      Black Panther Tracker
+                    </h1>
+                    <p className="text-[10px] sm:text-xs text-neutral-400 font-mono tracking-wider mt-1.5 uppercase">
+                      Interactive Academic Performance Tracker
+                    </p>
+                  </div>
+
+                  {/* Grades abcde... list inside frame */}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-4 sm:grid-cols-7 gap-2.5 text-center">
+                      {gradeBoundaries.map((g) => (
+                        <div
+                          key={g.name}
+                          className="p-3 rounded-2xl border border-neutral-900 bg-neutral-950/90 flex flex-col items-center justify-center min-h-[50px] shadow-lg backdrop-blur-sm"
+                        >
+                          <span className={`text-xl font-black ${g.color.split(" ")[0]}`}>{g.name}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
                 </div>
               </div>
-            </div>
+              </div>
 
             {/* Floating Form Box */}
             <div className="col-span-1 lg:col-span-5 max-w-md mx-auto w-full h-full lg:max-w-none">
@@ -1149,12 +1228,17 @@ export default function App() {
                 {/* LOGIN FORM */}
                 <form onSubmit={handleLogin} className="flex-1 flex flex-col justify-between space-y-5">
                   <div className="space-y-4">
-                    <div className="text-center pb-2">
-                      <Cat className="w-8 h-8 mx-auto opacity-70 mb-2 text-purple-400" />
-                      <h2 className="text-lg font-bold text-white tracking-tight">Access Control Center</h2>
-                      <p className="text-xs text-neutral-500 mt-1">
-                        Authenticate with your student stealth alias or teacher administrator credentials.
-                      </p>
+                    <div className="text-center pb-2 flex items-center justify-center space-x-2.5">
+                      <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-neutral-900 overflow-hidden border border-purple-950/80">
+                        <img
+                          src={pantherLogo}
+                          alt="Black Panther"
+                          className="h-full w-full object-cover rounded-lg"
+                          referrerPolicy="no-referrer"
+                        />
+                        <span className="absolute -inset-0.5 rounded-lg bg-purple-500/20 blur opacity-25 animate-pulse"></span>
+                      </div>
+                      <h2 className="text-lg font-bold text-white tracking-tight">Access Control</h2>
                     </div>
 
                     <div className="space-y-1.5">
@@ -1167,7 +1251,7 @@ export default function App() {
                         required
                         value={loginUsername}
                         onChange={(e) => setLoginUsername(e.target.value)}
-                        placeholder="e.g. agent_alias or admin"
+                        placeholder="e.g. agent_alias"
                         className="w-full bg-[#030304] border rounded-xl px-4 py-3 text-sm text-white placeholder-neutral-600 focus:outline-none transition border-purple-950/80 focus:border-purple-600 focus:ring-1 focus:ring-purple-600"
                       />
                     </div>
@@ -1193,7 +1277,7 @@ export default function App() {
                     type="submit"
                     className="w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white transition shadow-lg font-display tracking-wide uppercase active:scale-[0.98] bg-purple-700 hover:bg-purple-650 shadow-purple-650/15"
                   >
-                    Authenticate Ingress
+                    Log in
                   </button>
                 </form>
 
@@ -1602,6 +1686,55 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Chart Dimension Sub-controls */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#030304]/40 border border-purple-950/45 p-4 rounded-2xl">
+                <div className="flex flex-col space-y-1">
+                  <span className="text-[9px] font-mono uppercase text-neutral-500 tracking-wider">Chart Dimension Mode</span>
+                  <div className="flex bg-[#010102] border border-purple-950/75 rounded-xl p-1 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setChartDisplayMode("chronological")}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition ${
+                        chartDisplayMode === "chronological"
+                          ? "bg-purple-950 text-purple-300 border border-purple-900"
+                          : "text-neutral-500 hover:text-neutral-300"
+                      }`}
+                    >
+                      Chronological Course Timeline
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChartDisplayMode("single_test")}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition ${
+                        chartDisplayMode === "single_test"
+                          ? "bg-purple-950 text-purple-300 border border-purple-900"
+                          : "text-neutral-500 hover:text-neutral-300"
+                      }`}
+                    >
+                      Single Assessment Focus
+                    </button>
+                  </div>
+                </div>
+
+                {chartDisplayMode === "single_test" && (
+                  <div className="flex flex-col space-y-1 min-w-[220px] animate-fade-in">
+                    <label className="text-[9px] font-mono uppercase text-neutral-500 tracking-wider">Select Focus Assessment</label>
+                    <select
+                      id="chart-assessment-select"
+                      value={selectedChartTestId}
+                      onChange={(e) => setSelectedChartTestId(e.target.value)}
+                      className="bg-[#030304] border border-purple-950/80 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-purple-600 transition"
+                    >
+                      {(teacherData?.tests || []).map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
               {/* Dynamic Sub-control for Individual Student Tab */}
               {teacherChartTab === "student" && (
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#030304]/60 border border-purple-950/30 p-4 rounded-2xl animate-fade-in">
@@ -1609,75 +1742,148 @@ export default function App() {
                     <span className="text-[9px] font-mono uppercase text-neutral-500 tracking-wider">Tracking target</span>
                     <h4 className="text-xs font-semibold text-white">Focus Student Trace: {currentMetricStudentNickname}</h4>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-[10px] font-mono text-purple-400">Roster Selection:</span>
-                    <select
-                      id="selected-chart-student-select"
-                      value={selectedChartStudent}
-                      onChange={(e) => setSelectedChartStudent(e.target.value)}
-                      className="bg-[#030304] border border-purple-950/70 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-purple-600 transition"
-                    >
-                      {(teacherData?.students || []).map(s => (
-                        <option key={s.username} value={s.username}>
-                          {s.nickname || s.username} ({s.username})
-                        </option>
-                      ))}
-                    </select>
+                  <div className="text-[10px] font-mono text-neutral-500 italic">
+                    (Select any student from the class roster below to plot their trace)
                   </div>
                 </div>
               )}
 
               {/* Chart Stage */}
               <div className="w-full">
-                {((teacherChartTab === "whole" && wholeGroupLineData.length > 0) ||
-                  (teacherChartTab === "groups" && overlayLineData.length > 0) ||
-                  (teacherChartTab === "student" && individualStudentLineData.length > 0)) ? (
-                  <div className="h-[320px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={
-                          teacherChartTab === "whole"
-                            ? wholeGroupLineData
-                            : teacherChartTab === "groups"
-                            ? overlayLineData
-                            : individualStudentLineData
-                        }
-                        margin={{ top: 15, right: 20, left: -25, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#22123b" />
-                        <XAxis dataKey="testName" stroke="#6d5c8a" fontSize={10} fontFamily="JetBrains Mono" />
-                        <YAxis domain={[0, 100]} stroke="#6d5c8a" fontSize={10} fontFamily="JetBrains Mono" tickFormatter={(v) => `${v}%`} />
-                        <Tooltip
-                          contentStyle={{ backgroundColor: "#090611", borderColor: "#442a78", borderRadius: "1rem" }}
-                          itemStyle={{ fontSize: "11px" }}
-                          labelStyle={{ color: "#c084fc", fontSize: "11px", fontFamily: "JetBrains Mono", fontWeight: "bold" }}
-                          formatter={(v: any) => [`${v}%`, "Score"]}
-                        />
-                        <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono", paddingLeft: 10 }} />
-                        {teacherChartTab === "whole" && (
-                          <Line type="monotone" name="Cohort Average %" dataKey="Cohort Average %" stroke="#a855f7" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 7 }} />
-                        )}
-                        {teacherChartTab === "groups" && (
-                          <>
-                            <Line type="monotone" name="Group A Avg" dataKey="Group A Average %" stroke="#3b82f6" strokeWidth={2.5} dot={{ r: 3 }} />
-                            <Line type="monotone" name="Group B Avg" dataKey="Group B Average %" stroke="#22c55e" strokeWidth={2.5} dot={{ r: 3 }} />
-                            <Line type="monotone" name="Group C Avg" dataKey="Group C Average %" stroke="#eab308" strokeWidth={2.5} dot={{ r: 3 }} />
-                            <Line type="monotone" name="Group D Avg" dataKey="Group D Average %" stroke="#a855f7" strokeWidth={2.5} dot={{ r: 3 }} />
-                            <Line type="monotone" name="Group E Avg" dataKey="Group E Average %" stroke="#f43f5e" strokeWidth={2.5} dot={{ r: 3 }} />
-                          </>
-                        )}
-                        {teacherChartTab === "student" && (
-                          <Line type="monotone" name="Student Marks %" dataKey="Student Performance %" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 7 }} />
-                        )}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                {chartDisplayMode === "chronological" ? (
+                  ((teacherChartTab === "whole" && wholeGroupLineData.length > 0) ||
+                    (teacherChartTab === "groups" && overlayLineData.length > 0) ||
+                    (teacherChartTab === "student" && individualStudentLineData.length > 0)) ? (
+                    <div className="h-[320px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={
+                            teacherChartTab === "whole"
+                              ? wholeGroupLineData
+                              : teacherChartTab === "groups"
+                              ? overlayLineData
+                              : individualStudentLineData
+                          }
+                          margin={{ top: 15, right: 20, left: -25, bottom: 5 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#22123b" />
+                          <XAxis dataKey="testName" stroke="#6d5c8a" fontSize={10} fontFamily="JetBrains Mono" />
+                          <YAxis domain={[0, 100]} stroke="#6d5c8a" fontSize={10} fontFamily="JetBrains Mono" tickFormatter={(v) => `${v}%`} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: "#090611", borderColor: "#442a78", borderRadius: "1rem" }}
+                            itemStyle={{ fontSize: "11px" }}
+                            labelStyle={{ color: "#c084fc", fontSize: "11px", fontFamily: "JetBrains Mono", fontWeight: "bold" }}
+                            formatter={(v: any) => [`${v}%`, "Score"]}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono", paddingLeft: 10 }} />
+                          {teacherChartTab === "whole" && (
+                            <Line type="monotone" name="Cohort Average %" dataKey="Cohort Average %" stroke="#a855f7" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 7 }} />
+                          )}
+                          {teacherChartTab === "groups" && (
+                            <>
+                              <Line type="monotone" name="Group A Avg" dataKey="Group A Average %" stroke="#3b82f6" strokeWidth={2.5} dot={{ r: 3 }} />
+                              <Line type="monotone" name="Group B Avg" dataKey="Group B Average %" stroke="#22c55e" strokeWidth={2.5} dot={{ r: 3 }} />
+                              <Line type="monotone" name="Group C Avg" dataKey="Group C Average %" stroke="#eab308" strokeWidth={2.5} dot={{ r: 3 }} />
+                              <Line type="monotone" name="Group D Avg" dataKey="Group D Average %" stroke="#a855f7" strokeWidth={2.5} dot={{ r: 3 }} />
+                              <Line type="monotone" name="Group E Avg" dataKey="Group E Average %" stroke="#f43f5e" strokeWidth={2.5} dot={{ r: 3 }} />
+                            </>
+                          )}
+                          {teacherChartTab === "student" && (
+                            <Line type="monotone" name="Student Marks %" dataKey="Student Performance %" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 7 }} />
+                          )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-[240px] flex flex-col items-center justify-center text-center text-neutral-600 border border-dashed border-purple-950/60 rounded-2xl bg-[#030304]/30">
+                      <TrendingUp className="w-12 h-12 text-neutral-800 mb-3" />
+                      <p className="text-sm font-semibold">Insufficient score registries</p>
+                      <p className="text-xs text-neutral-600 max-w-sm mt-1">There are no matching logged grades currently available to plot for this trace view.</p>
+                    </div>
+                  )
                 ) : (
-                  <div className="h-[240px] flex flex-col items-center justify-center text-center text-neutral-600 border border-dashed border-purple-950/60 rounded-2xl bg-[#030304]/30">
-                    <TrendingUp className="w-12 h-12 text-neutral-800 mb-3" />
-                    <p className="text-sm font-semibold">Insufficient score registries</p>
-                    <p className="text-xs text-neutral-600 max-w-sm mt-1">There are no matching logged grades currently available to plot for this trace view.</p>
-                  </div>
+                  /* Single Assessment Focus Mode */
+                  ((teacherChartTab === "whole" && singleTestWholeGroupData.length > 0) ||
+                    (teacherChartTab === "groups" && singleTestGroupsData.length > 0) ||
+                    (teacherChartTab === "student" && singleTestStudentCompareData.length > 0)) ? (
+                    <div className="h-[320px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={
+                            teacherChartTab === "whole"
+                              ? singleTestWholeGroupData
+                              : teacherChartTab === "groups"
+                              ? singleTestGroupsData
+                              : singleTestStudentCompareData
+                          }
+                          margin={{ top: 15, right: 20, left: -20, bottom: 5 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#22123b" />
+                          <XAxis 
+                            dataKey={
+                              teacherChartTab === "whole"
+                                ? "name"
+                                : teacherChartTab === "groups"
+                                ? "groupName"
+                                : "category"
+                            } 
+                            stroke="#6d5c8a" 
+                            fontSize={10} 
+                            fontFamily="JetBrains Mono" 
+                          />
+                          <YAxis domain={[0, 100]} stroke="#6d5c8a" fontSize={10} fontFamily="JetBrains Mono" tickFormatter={(v) => `${v}%`} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: "#090611", borderColor: "#442a78", borderRadius: "1rem" }}
+                            itemStyle={{ fontSize: "11px" }}
+                            labelStyle={{ color: "#c084fc", fontSize: "11px", fontFamily: "JetBrains Mono", fontWeight: "bold" }}
+                            formatter={(v: any) => [`${v}%`, "Performance"]}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono", paddingLeft: 10 }} />
+                          
+                          {teacherChartTab === "whole" && (
+                            <Bar name={`Scores % for ${selectedChartTestName}`} dataKey="Score %" fill="#a855f7" radius={[6, 6, 0, 0]}>
+                              {singleTestWholeGroupData.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill="#a855f7" />
+                              ))}
+                            </Bar>
+                          )}
+
+                          {teacherChartTab === "groups" && (
+                            <Bar name={`Group Comparison % for ${selectedChartTestName}`} dataKey="Group Average %" radius={[6, 6, 0, 0]}>
+                              {singleTestGroupsData.map((entry, index) => {
+                                const colors: { [key: string]: string } = {
+                                  "Group A": "#3b82f6",
+                                  "Group B": "#22c55e",
+                                  "Group C": "#eab308",
+                                  "Group D": "#a855f7",
+                                  "Group E": "#f43f5e"
+                                };
+                                return <Cell key={`cell-${index}`} fill={colors[entry.groupName] || "#6366f1"} />;
+                              })}
+                            </Bar>
+                          )}
+
+                          {teacherChartTab === "student" && (
+                            <Bar name={`Comparison % for ${selectedChartTestName}`} dataKey="Performance %" radius={[6, 6, 0, 0]}>
+                              {singleTestStudentCompareData.map((entry, index) => {
+                                let cellColor = "#f59e0b"; // Student (Amber)
+                                if (entry.category.endsWith("Avg")) {
+                                  cellColor = entry.category === "Cohort Avg" ? "#3b82f6" : "#a855f7";
+                                }
+                                return <Cell key={`cell-${index}`} fill={cellColor} />;
+                              })}
+                            </Bar>
+                          )}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-[240px] flex flex-col items-center justify-center text-center text-neutral-600 border border-dashed border-purple-950/60 rounded-2xl bg-[#030304]/30">
+                      <TrendingUp className="w-12 h-12 text-neutral-800 mb-3" />
+                      <p className="text-sm font-semibold">Insufficient score registries</p>
+                      <p className="text-xs text-neutral-600 max-w-sm mt-1">There are no matching logged grades currently available to plot for this trace view.</p>
+                    </div>
+                  )
                 )}
               </div>
             </div>
@@ -2143,271 +2349,323 @@ export default function App() {
                   </div>
                 </div>
 
-                {rosterViewMode === "list" ? (
-                  /* Filter and roster lists */
-                  <div className="grid sm:grid-cols-2 gap-4">
-                    
-                    {/* Students Roster list */}
-                    <div>
-                      <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest block mb-2">Class Grads ({
-                        teacherData.students.filter(s => {
-                          const matchClass = teacherFilterClass === "ALL" || s.classGroup === teacherFilterClass;
-                          const matchYear = teacherFilterYear === "ALL" || s.academicYear === teacherFilterYear;
-                          return matchClass && matchYear;
-                        }).length
-                      })</span>
-                      
-                      <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1">
-                        {teacherData.students
-                          .filter(s => {
-                            const matchClass = teacherFilterClass === "ALL" || s.classGroup === teacherFilterClass;
-                            const matchYear = teacherFilterYear === "ALL" || s.academicYear === teacherFilterYear;
-                            return matchClass && matchYear;
+                {/* Unified Search Input for Students */}
+                <div className="relative mb-3">
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none">
+                    <Search className="h-4 w-4 text-purple-400" />
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Filter students by private nickname or username..."
+                    value={rosterSearch}
+                    onChange={(e) => setRosterSearch(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 bg-[#030304]/80 border border-purple-950/80 rounded-2xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600/40 transition-all duration-150"
+                  />
+                  {rosterSearch && (
+                    <button 
+                      type="button"
+                      onClick={() => setRosterSearch("")}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-neutral-500 hover:text-neutral-300 text-[10px] font-mono"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid sm:grid-cols-12 gap-5">
+                  {/* Left Column: Toggled Roster (Single List or Per Group View) */}
+                  <div className="sm:col-span-7 space-y-3">
+                    {rosterViewMode === "list" ? (
+                      /* Students Roster list */
+                      <div>
+                        <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest block mb-2">
+                          Class Cohort ({
+                            teacherData.students.filter(s => {
+                              const matchClass = teacherFilterClass === "ALL" || s.classGroup === teacherFilterClass;
+                              const matchYear = teacherFilterYear === "ALL" || s.academicYear === teacherFilterYear;
+                              const matchSearch = !rosterSearch.trim() ||
+                                s.nickname.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+                                s.username.toLowerCase().includes(rosterSearch.toLowerCase());
+                              return matchClass && matchYear && matchSearch;
+                            }).length
                           })
-                          .map(student => {
-                            // Compute average performance for this student
-                            const sScores = teacherData.scores.filter(sc => sc.studentUsername === student.username);
-                            const avgValue = sScores.length > 0
-                              ? sScores.reduce((sum, sx) => sum + sx.percentage, 0) / sScores.length
-                              : null;
+                        </span>
+                        
+                        <div className="space-y-1.5 max-h-[350px] overflow-y-auto pr-1">
+                          {teacherData.students
+                            .filter(s => {
+                              const matchClass = teacherFilterClass === "ALL" || s.classGroup === teacherFilterClass;
+                              const matchYear = teacherFilterYear === "ALL" || s.academicYear === teacherFilterYear;
+                              const matchSearch = !rosterSearch.trim() ||
+                                s.nickname.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+                                s.username.toLowerCase().includes(rosterSearch.toLowerCase());
+                              return matchClass && matchYear && matchSearch;
+                            })
+                            .map(student => {
+                              // Compute average performance for this student
+                              const sScores = teacherData.scores.filter(sc => sc.studentUsername === student.username);
+                              const avgValue = sScores.length > 0
+                                ? sScores.reduce((sum, sx) => sum + sx.percentage, 0) / sScores.length
+                                : null;
 
-                            return (
-                              <button
-                                id={`select-student-${student.username}`}
-                                key={student.username}
-                                onClick={() => setSelectedStudentDrilldown(student.username)}
-                                className={`w-full text-left p-3 rounded-xl border transition flex items-center justify-between ${
-                                  selectedStudentDrilldown === student.username
-                                    ? "bg-purple-950/60 border-purple-500/70 text-white"
-                                    : "bg-neutral-900/40 border-neutral-850/60 text-neutral-300 hover:bg-neutral-900"
-                                }`}
-                              >
-                                <div className="truncate max-w-[70%]">
-                                  <p className="font-semibold text-xs truncate">{student.nickname}</p>
-                                  <span className="font-mono text-[9px] text-neutral-500">
-                                    User: {student.username} (Group {student.classGroup})
-                                  </span>
-                                </div>
-                                <div className="text-right">
-                                  {avgValue !== null ? (
-                                    <>
-                                      <span className="font-mono font-bold text-xs text-purple-300 block">{avgValue.toFixed(1)}%</span>
-                                      <span className="text-[9px] text-neutral-500 uppercase">{sScores.length} logged</span>
-                                    </>
-                                  ) : (
-                                    <span className="text-[9px] text-neutral-600 italic">No entries</span>
-                                  )}
-                                </div>
-                              </button>
-                            );
-                          })}
-                      </div>
-                    </div>
-
-                    {/* Drilling information pane */}
-                    <div className="bg-[#030304] rounded-2xl p-4 border border-purple-950/80 flex flex-col justify-between min-h-[300px]">
-                      {selectedStudentDrilldown ? (
-                        (() => {
-                          const sProfile = teacherData.students.find(s => s.username === selectedStudentDrilldown);
-                          if (!sProfile) return <p className="text-neutral-500 text-xs">Error profile loading.</p>;
-
-                          const sScoresFiltered = teacherData.scores.filter(
-                            sc => sc.studentUsername === selectedStudentDrilldown
-                          );
-
-                          const avgVal = sScoresFiltered.length > 0
-                            ? sScoresFiltered.reduce((sum, s) => sum + s.percentage, 0) / sScoresFiltered.length
-                            : 0;
-
-                          return (
-                            <div className="flex flex-col justify-between h-full space-y-4">
-                              <div>
-                                <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
-                                  <span className="text-[10px] font-mono text-purple-400 capitalize">Alias: {sProfile.nickname}</span>
-                                  <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400">Class {sProfile.classGroup}</span>
-                                </div>
-
-                                <div className="mt-3.5 space-y-1">
-                                  <p className="text-[10px] text-neutral-550 font-mono uppercase">Secure Stats</p>
-                                  <div className="text-sm font-semibold text-white font-mono leading-relaxed mt-1 flex items-center">
-                                    <span>Group:</span>
-                                    <select
-                                      value={sProfile.classGroup}
-                                      onChange={(e) => handleReassignStudentGroup(sProfile.username, e.target.value, sProfile.nickname)}
-                                      className="ml-2 bg-[#030304] border border-purple-950/60 rounded px-2 py-0.5 text-xs text-purple-300 font-bold focus:outline-none focus:border-purple-600 transition inline-block"
-                                    >
-                                      <option value="A">Group A</option>
-                                      <option value="B">Group B</option>
-                                      <option value="C">Group C</option>
-                                      <option value="D">Group D</option>
-                                      <option value="E">Group E</option>
-                                    </select>
+                              return (
+                                <button
+                                  id={`select-student-${student.username}`}
+                                  key={student.username}
+                                  onClick={() => {
+                                    setSelectedStudentDrilldown(student.username);
+                                    setSelectedChartStudent(student.username);
+                                    setTeacherChartTab("student");
+                                  }}
+                                  className={`w-full text-left p-3 rounded-xl border transition flex items-center justify-between cursor-pointer ${
+                                    selectedStudentDrilldown === student.username
+                                      ? "bg-purple-950/60 border-purple-500/70 text-white"
+                                      : "bg-neutral-900/40 border-neutral-850/60 text-neutral-300 hover:bg-neutral-900"
+                                  }`}
+                                >
+                                  <div className="truncate max-w-[70%]">
+                                    <p className="font-semibold text-xs truncate">{student.nickname}</p>
+                                    <span className="font-mono text-[9px] text-neutral-500">
+                                      User: {student.username} (Group {student.classGroup})
+                                    </span>
                                   </div>
-                                  <div className="mt-4 pt-1 space-y-1">
-                                    <p className="text-xs font-semibold text-white">
-                                      Average secure percentage:{" "}
-                                      <span className="text-purple-300 font-mono font-bold">{avgVal > 0 ? `${avgVal.toFixed(1)}%` : "N/A"}</span>
-                                    </p>
-                                    <p className="text-xs text-neutral-400 font-semibold mt-1">
-                                      Highest secure score:{" "}
-                                      <span className="text-emerald-400 font-mono">
-                                        {sScoresFiltered.length > 0
-                                          ? `${Math.max(...sScoresFiltered.map(x => x.percentage))}%`
-                                          : "None"}
-                                      </span>
-                                    </p>
-                                  </div>
-                                </div>
-
-                                <div className="mt-4 space-y-2">
-                                  <span className="text-[10px] font-mono text-neutral-500 uppercase block">Log entries checklist</span>
-                                  <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1 text-[11px]">
-                                    {sScoresFiltered.length > 0 ? (
-                                      sScoresFiltered.map(item => (
-                                        <div key={item.id} className="flex justify-between items-center bg-neutral-900 px-2 py-1 rounded">
-                                          <span className="truncate text-neutral-300 font-medium max-w-[60%]">{item.testName}</span>
-                                          <span className="font-mono text-purple-400">{item.percentage}% ({item.grade})</span>
-                                        </div>
-                                      ))
+                                  <div className="text-right">
+                                    {avgValue !== null ? (
+                                      <>
+                                        <span className="font-mono font-bold text-xs text-purple-300 block">{avgValue.toFixed(1)}%</span>
+                                        <span className="text-[9px] text-neutral-500 uppercase">{sScores.length} logged</span>
+                                      </>
                                     ) : (
-                                      <p className="text-neutral-600 italic">No test grades submitted.</p>
+                                      <span className="text-[9px] text-neutral-600 italic">No entries</span>
                                     )}
                                   </div>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    ) : (
+                      /* BY GROUP COMPREHENSIVE VIEW */
+                      <div className="space-y-4 max-h-[350px] overflow-y-auto pr-2">
+                        {["A", "B", "C", "D", "E"].map(groupName => {
+                          const groupStudents = teacherData.students.filter(
+                            s => s.classGroup === groupName && 
+                                 (teacherFilterYear === "ALL" || s.academicYear === teacherFilterYear) &&
+                                 (!rosterSearch.trim() || 
+                                  s.nickname.toLowerCase().includes(rosterSearch.toLowerCase()) || 
+                                  s.username.toLowerCase().includes(rosterSearch.toLowerCase()))
+                          );
+                          
+                          return (
+                            <div key={groupName} className="bg-[#030304]/60 border border-purple-950/60 rounded-2xl p-4 space-y-3">
+                              <div className="flex items-center justify-between border-b border-purple-950/30 pb-2">
+                                <span className="font-mono text-xs font-bold text-purple-300 uppercase">
+                                  Class Group {groupName}
+                                </span>
+                                <span className="text-[10px] bg-purple-950/40 text-purple-200 px-2.5 py-0.5 rounded-full font-bold">
+                                  {groupStudents.length} {groupStudents.length === 1 ? "student" : "students"}
+                                </span>
+                              </div>
+
+                              {groupStudents.length > 0 ? (
+                                <div className="space-y-2">
+                                  {groupStudents.map(student => {
+                                    const sScores = teacherData.scores.filter(sc => sc.studentUsername === student.username);
+                                    const avgValue = sScores.length > 0
+                                      ? sScores.reduce((sum, sx) => sum + sx.percentage, 0) / sScores.length
+                                      : null;
+
+                                    return (
+                                      <button
+                                        type="button"
+                                        key={student.username}
+                                        onClick={() => {
+                                          setSelectedStudentDrilldown(student.username);
+                                          setSelectedChartStudent(student.username);
+                                          setTeacherChartTab("student");
+                                        }}
+                                        className={`w-full text-left p-3 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs cursor-pointer ${
+                                          selectedStudentDrilldown === student.username
+                                            ? "bg-purple-950/60 border-purple-500/70 text-white animate-pulse"
+                                            : "bg-neutral-950/60 border-neutral-900 text-neutral-300 hover:bg-neutral-900/80"
+                                        }`}
+                                      >
+                                        <div className="truncate max-w-[65%]">
+                                          <p className="font-semibold text-white truncate">{student.nickname}</p>
+                                          <p className="font-mono text-[9px] text-neutral-500 truncate">
+                                            {student.username} {student.academicYear !== "ALL" && `(${student.academicYear})`}
+                                          </p>
+                                          {avgValue !== null ? (
+                                            <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 bg-purple-950/40 text-purple-300 rounded font-bold font-mono">
+                                              Avg: {avgValue.toFixed(1)}%
+                                            </span>
+                                          ) : (
+                                            <span className="text-[9px] text-neutral-600 block mt-0.5 italic">No submissions</span>
+                                          )}
+                                        </div>
+
+                                        {/* Action row */}
+                                        <div className="flex items-center space-x-2 self-end sm:self-center" onClick={(e) => e.stopPropagation()}>
+                                          <div className="flex items-center space-x-1">
+                                            <span className="text-[9px] font-mono text-neutral-600 uppercase">Move:</span>
+                                            <select
+                                              value={student.classGroup}
+                                              onChange={(e) => handleReassignStudentGroup(student.username, e.target.value, student.nickname)}
+                                              className="bg-[#030304] border border-purple-950/80 rounded px-1.5 py-0.5 text-[10px] text-purple-200 font-bold focus:outline-none focus:border-purple-600 transition"
+                                            >
+                                              <option value="A">Group A</option>
+                                              <option value="B">Group B</option>
+                                              <option value="C">Group C</option>
+                                              <option value="D">Group D</option>
+                                              <option value="E">Group E</option>
+                                            </select>
+                                          </div>
+
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDeleteStudent(student.username, student.nickname);
+                                            }}
+                                            title="Purge student profile"
+                                            className="p-1.5 bg-red-950/30 hover:bg-rose-950 text-rose-400 hover:text-rose-200 border border-red-950/50 hover:border-red-650/50 rounded-lg transition"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="text-[10px] font-mono text-neutral-600 italic">No candidates registered in this class group.</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Column: Drilling information pane (Shared dynamically between list and group views) */}
+                  <div className="sm:col-span-5 bg-[#030304] rounded-2xl p-4 border border-purple-950/80 flex flex-col justify-between min-h-[350px] h-fit">
+                    {selectedStudentDrilldown ? (
+                      (() => {
+                        const sProfile = teacherData.students.find(s => s.username === selectedStudentDrilldown);
+                        if (!sProfile) return <p className="text-neutral-500 text-xs">Error profile loading.</p>;
+
+                        const sScoresFiltered = teacherData.scores.filter(
+                          sc => sc.studentUsername === selectedStudentDrilldown
+                        );
+
+                        const avgVal = sScoresFiltered.length > 0
+                          ? sScoresFiltered.reduce((sum, s) => sum + s.percentage, 0) / sScoresFiltered.length
+                          : 0;
+
+                        return (
+                          <div className="flex flex-col justify-between h-full space-y-4">
+                            <div>
+                              <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
+                                <span className="text-[10px] font-mono text-purple-400 capitalize">Alias: {sProfile.nickname}</span>
+                                <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400">Class {sProfile.classGroup}</span>
+                              </div>
+
+                              <div className="mt-3.5 space-y-1">
+                                <p className="text-[10px] text-neutral-550 font-mono uppercase">Secure Stats</p>
+                                <div className="text-sm font-semibold text-white font-mono leading-relaxed mt-1 flex items-center">
+                                  <span>Group:</span>
+                                  <select
+                                    value={sProfile.classGroup}
+                                    onChange={(e) => handleReassignStudentGroup(sProfile.username, e.target.value, sProfile.nickname)}
+                                    className="ml-2 bg-[#030304] border border-purple-950/60 rounded px-2 py-0.5 text-xs text-purple-300 font-bold focus:outline-none focus:border-purple-600 transition inline-block"
+                                  >
+                                    <option value="A">Group A</option>
+                                    <option value="B">Group B</option>
+                                    <option value="C">Group C</option>
+                                    <option value="D">Group D</option>
+                                    <option value="E">Group E</option>
+                                  </select>
+                                </div>
+                                <div className="mt-4 pt-1 space-y-1">
+                                  <p className="text-xs font-semibold text-white">
+                                    Average secure percentage:{" "}
+                                    <span className="text-purple-300 font-mono font-bold">{avgVal > 0 ? `${avgVal.toFixed(1)}%` : "N/A"}</span>
+                                  </p>
+                                  <p className="text-xs text-neutral-400 font-semibold mt-1">
+                                    Highest secure score:{" "}
+                                    <span className="text-emerald-400 font-mono">
+                                      {sScoresFiltered.length > 0
+                                        ? `${Math.max(...sScoresFiltered.map(x => x.percentage))}%`
+                                        : "None"}
+                                    </span>
+                                  </p>
                                 </div>
                               </div>
 
-                              <div className="space-y-2 pt-2 border-t border-purple-950/30">
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteStudent(sProfile.username, sProfile.nickname)}
-                                  className="w-full py-2 bg-red-950/40 hover:bg-rose-900 border border-red-900/60 text-red-350 uppercase font-bold text-[10px] rounded-lg tracking-wider transition inline-flex items-center justify-center space-x-1"
-                                >
-                                  <Trash2 className="w-3" />
-                                  <span>Purge Student Profile</span>
-                                </button>
-                                
-                                <button
-                                  id="drilldown-retract-all"
-                                  onClick={() => {
-                                    if (sScoresFiltered.length === 0) return;
-                                    requestConfirm(
-                                      "Retract All Test Grades",
-                                      `Are you absolutely sure you want to retract/delete all test submissions logged for alias "${sProfile.nickname}"?`,
-                                      async () => {
-                                        try {
-                                          await Promise.all(
-                                            sScoresFiltered.map(item =>
-                                              fetch(`/api/scores/${item.id}`, { method: "DELETE" })
-                                            )
-                                          );
-                                          showNotification(`Purged entries of candidate "${sProfile.nickname}"`, "success");
-                                          syncApplicationData();
-                                        } catch (_) {}
-                                      }
-                                    );
-                                  }}
-                                  disabled={sScoresFiltered.length === 0}
-                                  className="w-full py-1.5 bg-neutral-900 hover:bg-neutral-850 text-neutral-405 uppercase font-bold text-[9px] rounded-lg tracking-wider disabled:opacity-30 disabled:pointer-events-none transition"
-                                >
-                                  Clear Grade Submissions
-                                </button>
+                              <div className="mt-4 space-y-2">
+                                <span className="text-[10px] font-mono text-neutral-500 uppercase block">Log entries checklist</span>
+                                <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1 text-[11px]">
+                                  {sScoresFiltered.length > 0 ? (
+                                    sScoresFiltered.map(item => (
+                                      <div key={item.id} className="flex justify-between items-center bg-neutral-900 px-2 py-1 rounded">
+                                        <span className="truncate text-neutral-300 font-medium max-w-[60%]">{item.testName}</span>
+                                        <span className="font-mono text-purple-400">{item.percentage}% ({item.grade})</span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="text-neutral-600 italic">No test grades submitted.</p>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          );
-                        })()
-                      ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center text-neutral-600 p-4">
-                          <Search className="w-8 h-8 text-neutral-800 mb-2" />
-                          <p className="text-xs font-semibold">Select static profile from Roster listing to view detail sheets</p>
-                        </div>
-                      )}
-                    </div>
 
-                  </div>
-                ) : (
-                  /* BY GROUP COMPREHENSIVE VIEW */
-                  <div className="space-y-6 max-h-[480px] overflow-y-auto pr-2">
-                    {["A", "B", "C", "D", "E"].map(groupName => {
-                      const groupStudents = teacherData.students.filter(
-                        s => s.classGroup === groupName && (teacherFilterYear === "ALL" || s.academicYear === teacherFilterYear)
-                      );
-                      
-                      return (
-                        <div key={groupName} className="bg-[#030304]/60 border border-purple-950/60 rounded-2xl p-4 space-y-3">
-                          <div className="flex items-center justify-between border-b border-purple-950/30 pb-2">
-                            <span className="font-mono text-xs font-bold text-purple-300 uppercase">
-                              Class Group {groupName}
-                            </span>
-                            <span className="text-[10px] bg-purple-950/40 text-purple-200 px-2.5 py-0.5 rounded-full font-bold">
-                              {groupStudents.length} {groupStudents.length === 1 ? "student" : "students"}
-                            </span>
-                          </div>
-
-                          {groupStudents.length > 0 ? (
-                            <div className="space-y-2">
-                              {groupStudents.map(student => {
-                                const sScores = teacherData.scores.filter(sc => sc.studentUsername === student.username);
-                                const avgValue = sScores.length > 0
-                                  ? sScores.reduce((sum, sx) => sum + sx.percentage, 0) / sScores.length
-                                  : null;
-
-                                return (
-                                  <div
-                                    key={student.username}
-                                    className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl bg-neutral-950/60 border border-neutral-900 gap-3 text-xs"
-                                  >
-                                    <div className="truncate max-w-[65%]">
-                                      <p className="font-semibold text-white truncate">{student.nickname}</p>
-                                      <p className="font-mono text-[9px] text-neutral-500 truncate">
-                                        {student.username} {student.academicYear !== "ALL" && `(${student.academicYear})`}
-                                      </p>
-                                      {avgValue !== null ? (
-                                        <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 bg-purple-950/40 text-purple-300 rounded font-bold font-mono">
-                                          Avg: {avgValue.toFixed(1)}%
-                                        </span>
-                                      ) : (
-                                        <span className="text-[9px] text-neutral-600 block mt-0.5 italic">No submissions</span>
-                                      )}
-                                    </div>
-
-                                    {/* Action row */}
-                                    <div className="flex items-center space-x-2 self-end sm:self-center">
-                                      <div className="flex items-center space-x-1">
-                                        <span className="text-[9px] font-mono text-neutral-600 uppercase">Move:</span>
-                                        <select
-                                          value={student.classGroup}
-                                          onChange={(e) => handleReassignStudentGroup(student.username, e.target.value, student.nickname)}
-                                          className="bg-[#030304] border border-purple-950/80 rounded px-1.5 py-0.5 text-[10px] text-purple-200 font-bold focus:outline-none focus:border-purple-600 transition"
-                                        >
-                                          <option value="A">Group A</option>
-                                          <option value="B">Group B</option>
-                                          <option value="C">Group C</option>
-                                          <option value="D">Group D</option>
-                                          <option value="E">Group E</option>
-                                        </select>
-                                      </div>
-
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteStudent(student.username, student.nickname)}
-                                        title="Purge student profile"
-                                        className="p-1.5 bg-red-950/30 hover:bg-rose-950 text-rose-400 hover:text-rose-200 border border-red-950/50 hover:border-red-650/50 rounded-lg transition"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
+                            <div className="space-y-2 pt-2 border-t border-purple-950/30">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteStudent(sProfile.username, sProfile.nickname)}
+                                className="w-full py-2 bg-red-950/40 hover:bg-rose-900 border border-red-900/60 text-red-350 uppercase font-bold text-[10px] rounded-lg tracking-wider transition inline-flex items-center justify-center space-x-1"
+                              >
+                                <Trash2 className="w-3" />
+                                <span>Purge Student Profile</span>
+                              </button>
+                              
+                              <button
+                                id="drilldown-retract-all"
+                                onClick={() => {
+                                  if (sScoresFiltered.length === 0) return;
+                                  requestConfirm(
+                                    "Retract All Test Grades",
+                                    `Are you absolutely sure you want to retract/delete all test submissions logged for alias "${sProfile.nickname}"?`,
+                                    async () => {
+                                      try {
+                                        await Promise.all(
+                                          sScoresFiltered.map(item =>
+                                            fetch(`/api/scores/${item.id}`, { method: "DELETE" })
+                                          )
+                                        );
+                                        showNotification(`Purged entries of candidate "${sProfile.nickname}"`, "success");
+                                        syncApplicationData();
+                                      } catch (_) {}
+                                    }
+                                  );
+                                }}
+                                disabled={sScoresFiltered.length === 0}
+                                className="w-full py-1.5 bg-neutral-900 hover:bg-neutral-850 text-neutral-405 uppercase font-bold text-[9px] rounded-lg tracking-wider disabled:opacity-30 disabled:pointer-events-none transition"
+                              >
+                                Clear Grade Submissions
+                              </button>
                             </div>
-                          ) : (
-                            <p className="text-[10px] font-mono text-neutral-600 italic">No candidates registered in this class group.</p>
-                          )}
-                        </div>
-                      );
-                    })}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-center text-neutral-600 p-4">
+                        <Search className="w-8 h-8 text-neutral-800 mb-2" />
+                        <p className="text-xs font-semibold">Select static profile from Roster listing to view detail sheets</p>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
 
               </div>
 
@@ -2700,92 +2958,39 @@ export default function App() {
         </div>
       )}
 
-      {/* Corner Action Verification HUD & Splash */}
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end space-y-3 pointer-events-none max-w-sm w-full">
-        {/* Visual Splash Ring Effect */}
-        <AnimatePresence>
-          {splashPulse && (
-            <motion.div
-              initial={{ scale: 0.5, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 1.5, opacity: 0 }}
-              transition={{ duration: 0.6, ease: "easeOut" }}
-              className="absolute bottom-12 right-12 pointer-events-none flex items-center justify-center"
-            >
-              <div className={`absolute w-32 h-32 rounded-full border-2 ${
-                splashColor === "emerald" 
-                  ? "border-emerald-500/60 bg-emerald-500/5 shadow-[0_0_40px_rgba(16,185,129,0.25)]" 
-                  : splashColor === "purple"
-                  ? "border-purple-500/60 bg-purple-500/5 shadow-[0_0_40px_rgba(168,85,247,0.25)]"
-                  : "border-blue-500/60 bg-blue-500/5 shadow-[0_0_40px_rgba(59,130,246,0.25)]"
-              }`} />
-              <div className={`absolute w-12 h-12 rounded-full border ${
-                splashColor === "emerald" 
-                  ? "border-emerald-400/80 bg-emerald-500/10 shadow-[0_0_20px_rgba(16,185,129,0.4)]" 
-                  : splashColor === "purple"
-                  ? "border-purple-400/80 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.4)]"
-                  : "border-blue-400/80 bg-blue-500/10 shadow-[0_0_20px_rgba(59,130,246,0.4)]"
-              }`} />
-            </motion.div>
-          )}
-        </AnimatePresence>
+      {/* Integrated Sync Status & Action Log Footer */}
+      <footer className="w-full sticky bottom-0 left-0 right-0 z-40 border-t border-purple-950/40 bg-neutral-950/90 backdrop-blur-md py-2 px-4 sm:px-6">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          {/* Sync Engine status section */}
+          <div className="flex items-center space-x-2 text-xs">
+            <div className="relative flex h-1.5 w-1.5">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${config.hasSupabase ? "bg-emerald-400" : "bg-purple-400"}`}></span>
+              <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${config.hasSupabase ? "bg-emerald-500" : "bg-purple-500"}`}></span>
+            </div>
+            <p className="font-mono text-[11px] text-neutral-300">
+              Sync Status: <span className={config.hasSupabase ? "text-emerald-400 font-bold" : "text-neutral-500 font-bold"}>{config.hasSupabase ? "Online" : "Offline"}</span>
+            </p>
+          </div>
 
-        {/* Stack of Verified Actions */}
-        <div className="space-y-2 w-full flex flex-col items-end">
-          <AnimatePresence>
-            {verifiedActions.map((action, idx) => (
-              <motion.div
-                key={action.id}
-                initial={{ opacity: 0, x: 50, y: 10, scale: 0.9 }}
-                animate={{ 
-                  opacity: idx === 0 ? 1 : 0.6, 
-                  x: 0, 
-                  y: 0, 
-                  scale: idx === 0 ? 1 : 0.95 - (idx * 0.02),
-                  zIndex: 50 - idx 
-                }}
-                exit={{ opacity: 0, x: 100, transition: { duration: 0.2 } }}
-                layout
-                className={`pointer-events-auto bg-[#030304]/95 border border-neutral-900/80 backdrop-blur-md rounded-2xl p-3 shadow-2xl flex items-start space-x-3 max-w-xs sm:max-w-sm border-l-4 w-full ${
-                  action.type === "success"
-                    ? "border-emerald-500/30 border-l-emerald-500 shadow-emerald-950/20"
-                    : action.type === "error"
-                    ? "border-rose-500/30 border-l-rose-500 shadow-rose-950/20"
-                    : "border-purple-500/30 border-l-purple-500 shadow-purple-950/20"
-                }`}
-              >
-                <div className="shrink-0 mt-0.5">
-                  {action.type === "success" && (
-                    <div className="w-5 h-5 rounded-full bg-emerald-500/15 flex items-center justify-center border border-emerald-500/30">
-                      <CheckCircle className="w-3 h-3 text-emerald-400" />
-                    </div>
-                  )}
-                  {action.type === "error" && (
-                    <div className="w-5 h-5 rounded-full bg-rose-500/15 flex items-center justify-center border border-rose-500/30">
-                      <AlertTriangle className="w-3 h-3 text-rose-400" />
-                    </div>
-                  )}
-                  {action.type === "info" && (
-                    <div className="w-5 h-5 rounded-full bg-purple-500/15 flex items-center justify-center border border-purple-500/30">
-                      <Clock className="w-3 h-3 text-purple-400 animate-spin" style={{ animationDuration: "3s" }} />
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex-1 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[8px] font-mono font-bold tracking-widest text-neutral-400 uppercase">
-                      {action.type === "success" ? "✓ SECURE LEDGER SAVED" : action.type === "error" ? "⚠ SECURITY SYSTEM ALERT" : "🛈 STEALTH STATUS"}
-                    </span>
-                    <span className="text-[8px] font-mono text-neutral-500">{action.timestamp}</span>
-                  </div>
-                  <p className="text-[11px] text-neutral-200 leading-snug font-sans font-medium">{action.text}</p>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+          {/* Activity Log console (last event with timestamp, ultra-thinned) */}
+          <div className={`flex-1 max-w-md sm:border-l sm:border-purple-950/20 sm:pl-4 flex items-center space-x-2 text-[11px] font-mono text-neutral-400 truncate px-2 py-1 transition-all duration-300 ${flashLog ? "log-flash" : ""}`}>
+            <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-widest block font-bold shrink-0">
+              log:
+            </span>
+            {verifiedActions.length > 0 ? (
+              <div className="flex items-center space-x-2 truncate">
+                <span className={`w-1 h-1 rounded-full shrink-0 ${
+                  verifiedActions[0].type === "success" ? "bg-emerald-500" : verifiedActions[0].type === "error" ? "bg-rose-500" : "bg-purple-500 animate-pulse"
+                }`}></span>
+                <span className="truncate text-neutral-400">{verifiedActions[0].text}</span>
+                <span className="text-[9px] text-neutral-500 font-mono">({verifiedActions[0].timestamp})</span>
+              </div>
+            ) : (
+              <span className="text-neutral-600 italic">No operations.</span>
+            )}
+          </div>
         </div>
-      </div>
+      </footer>
 
     </div>
   );
