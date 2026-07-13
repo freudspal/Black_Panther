@@ -26,7 +26,8 @@ import {
   Hash,
   Upload,
   FileSpreadsheet,
-  Download
+  Download,
+  KeyRound
 } from "lucide-react";
 import {
   AreaChart,
@@ -776,6 +777,32 @@ export default function App() {
           }
         } catch (_) {
           showNotification("Network error. Failed to delete student profile.", "error");
+        }
+      }
+    );
+  };
+
+  // Reset Student Password (Teacher action)
+  const handleResetStudentPassword = (username: string, nickname: string) => {
+    requestConfirm(
+      "Reset Student Password",
+      `Are you sure you want to reset the password for student "${nickname}" back to the default "1234"?`,
+      async () => {
+        try {
+          const response = await fetch("/api/teacher/reset-student-password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username })
+          });
+          const data = await response.json();
+          if (response.ok && data.success) {
+            showNotification(`Student "${nickname}" password reset back to the default "1234" successfully.`, "success");
+            syncApplicationData();
+          } else {
+            showNotification(data.error || "Failed to reset student password.", "error");
+          }
+        } catch (_) {
+          showNotification("Network error. Failed to reset student password.", "error");
         }
       }
     );
@@ -2525,6 +2552,18 @@ export default function App() {
                                             type="button"
                                             onClick={(e) => {
                                               e.stopPropagation();
+                                              handleResetStudentPassword(student.username, student.nickname);
+                                            }}
+                                            title="Reset password to 1234"
+                                            className="p-1.5 bg-purple-950/30 hover:bg-purple-900 text-purple-400 hover:text-purple-200 border border-purple-950/50 hover:border-purple-600/50 rounded-lg transition"
+                                          >
+                                            <KeyRound className="w-3.5 h-3.5" />
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
                                               handleDeleteStudent(student.username, student.nickname);
                                             }}
                                             title="Purge student profile"
@@ -2620,6 +2659,15 @@ export default function App() {
                             </div>
 
                             <div className="space-y-2 pt-2 border-t border-purple-950/30">
+                              <button
+                                type="button"
+                                onClick={() => handleResetStudentPassword(sProfile.username, sProfile.nickname)}
+                                className="w-full py-2 bg-purple-950/40 hover:bg-purple-900 border border-purple-900/60 text-purple-350 uppercase font-bold text-[10px] rounded-lg tracking-wider transition inline-flex items-center justify-center space-x-1"
+                              >
+                                <KeyRound className="w-3" />
+                                <span>Reset Student Password</span>
+                              </button>
+
                               <button
                                 type="button"
                                 onClick={() => handleDeleteStudent(sProfile.username, sProfile.nickname)}
