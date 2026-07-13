@@ -2815,7 +2815,7 @@ export default function App() {
                 The Wild Cat <span className="text-purple-400">Arena</span>
               </h2>
               <p className="text-xs text-neutral-400 mt-1">
-                A high-privacy tracking platform which preserves student confidentiality using generated wild cat names. Compare overall weighted average performances across all class groups.
+                Live ranking against your peers
               </p>
             </div>
 
