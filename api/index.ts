@@ -863,6 +863,29 @@ app.post("/api/teacher/delete-student", async (req, res) => {
   }
 });
 
+// 6.15b RESET STUDENT PASSWORD (TEACHER ACTION)
+app.post("/api/teacher/reset-student-password", async (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username) {
+      res.status(400).json({ error: "Missing username for password reset." });
+      return;
+    }
+    const db = await loadDB(true);
+    const student = db.students.find(s => s.username.toLowerCase() === username.toLowerCase().trim());
+    if (!student) {
+      res.status(404).json({ error: "Student not found in database rosters." });
+      return;
+    }
+    student.passwordHash = hashPassword("1234");
+    student.hasChangedPassword = false;
+    await saveDB(db);
+    res.json({ success: true, message: "Student password reset to default '1234' successfully." });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 6.16 REASSIGN STUDENT ACADEMIC GROUP (TEACHER ACTION)
 app.post("/api/teacher/reassign-student-group", async (req, res) => {
   try {
