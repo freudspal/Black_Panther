@@ -27,7 +27,12 @@ import {
   Upload,
   FileSpreadsheet,
   Download,
-  KeyRound
+  KeyRound,
+  ExternalLink,
+  Gauge,
+  Play,
+  Pause,
+  RotateCcw
 } from "lucide-react";
 import {
   AreaChart,
@@ -45,7 +50,7 @@ import {
   ResponsiveContainer
 } from "recharts";
 import Header from "./components/Header";
-import { TestTemplate, Student, ScoreEntry, TeacherDashboardMetrics } from "./types";
+import { TestTemplate, Student, ScoreEntry, TeacherDashboardMetrics, RevisionSession, ExamAttempt, RevisionService, RevisionServiceLog } from "./types";
 // @ts-ignore
 import pantherLogo from "./assets/images/panther_logo_1782473515224.jpg";
 
@@ -108,6 +113,54 @@ export default function App() {
   );
   const [selectedTestId, setSelectedTestId] = useState<string>("");
   const [studentScoreRaw, setStudentScoreRaw] = useState<string>("");
+
+  // Student Revision tracker states
+  const [studentTab, setStudentTab] = useState<"my-progress" | "wild-cat-arena" | "revision-progress">("my-progress");
+  const [revisionSessions, setRevisionSessions] = useState<RevisionSession[]>([]);
+  const [examAttempts, setExamAttempts] = useState<ExamAttempt[]>([]);
+  const [revisionServices, setRevisionServices] = useState<RevisionService[]>([]);
+  const [revisionServiceLogs, setRevisionServiceLogs] = useState<RevisionServiceLog[]>([]);
+
+  // Study Session Timer & Search
+  const [timerSeconds, setTimerSeconds] = useState<number>(0);
+  const [isTimerRunning, setIsTimerRunning] = useState<boolean>(false);
+  const [cumulativeSearch, setCumulativeSearch] = useState<string>("");
+  const [quickLogTopic, setQuickLogTopic] = useState<string>("");
+  const [quickLogRag, setQuickLogRag] = useState<"red" | "amber" | "green">("green");
+  const [showQuickLogForm, setShowQuickLogForm] = useState<boolean>(false);
+  const [isSavingTopicLog, setIsSavingTopicLog] = useState<boolean>(false);
+  const [isSavingExamAttempt, setIsSavingExamAttempt] = useState<boolean>(false);
+  const [showLivenessCheck, setShowLivenessCheck] = useState<boolean>(false);
+
+  // Refs for background-accurate stopwatch timing and liveness check interval
+  const timerStartTimeRef = useRef<number | null>(null);
+  const timerBaseSecondsRef = useRef<number>(0);
+  const lastLivenessCheckMarkRef = useRef<number>(0);
+
+  // Teacher dashboard sub-tab state
+  const [teacherViewTab, setTeacherViewTab] = useState<"assessments" | "revision-progress">("assessments");
+
+  // Revision logging forms
+  const [revDate, setRevDate] = useState<string>(new Date().toISOString().split("T")[0]);
+  const [revDuration, setRevDuration] = useState<string>("");
+  const [revTopic, setRevTopic] = useState<string>("");
+  const [revRag, setRevRag] = useState<"red" | "amber" | "green">("green");
+  const [revComment, setRevComment] = useState<string>("");
+
+  // Exam Question Attempts forms
+  const [examComponent, setExamComponent] = useState<string>("");
+  const [examTopic, setExamTopic] = useState<string>("");
+  const [examWording, setExamWording] = useState<string>("");
+  const [examMarksAvailable, setExamMarksAvailable] = useState<string>("");
+  const [examMarksScored, setExamMarksScored] = useState<string>("");
+  const [examSelfMark, setExamSelfMark] = useState<string>(""); // self scoring score
+  const [examDate, setExamDate] = useState<string>(new Date().toISOString().split("T")[0]);
+
+  // External Services config forms
+  const [newServiceName, setNewServiceName] = useState<string>("");
+  const [newServiceUrl, setNewServiceUrl] = useState<string>("");
+  const [logServiceId, setLogServiceId] = useState<string>("");
+  const [logServiceDuration, setLogServiceDuration] = useState<string>("");
 
   // Teacher dynamic inputs
   const [newTestName, setNewTestName] = useState<string>("");
@@ -438,6 +491,13 @@ export default function App() {
     return getGradeSticker(percentage).name;
   }
 
+  const formatTime = (totalSeconds: number): string => {
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
   // Load config on mount
   useEffect(() => {
     fetch(`/api/config-status?t=${Date.now()}`)
@@ -454,6 +514,44 @@ export default function App() {
       .catch(err => console.error("Error loading API config", err));
   }, []);
 
+  // Sync timerSecondsRef with timerSeconds state to avoid interval re-triggering
+  const timerSecondsRef = useRef<number>(timerSeconds);
+  useEffect(() => {
+    timerSecondsRef.current = timerSeconds;
+  }, [timerSeconds]);
+
+  // Study timer effect with background accuracy and system clock timestamp tracking
+  useEffect(() => {
+    let interval: any = null;
+
+    if (isTimerRunning && !showLivenessCheck) {
+      if (timerStartTimeRef.current === null) {
+        timerStartTimeRef.current = Date.now() - (timerSecondsRef.current * 1000);
+      }
+
+      interval = setInterval(() => {
+        if (timerStartTimeRef.current !== null) {
+          const elapsedSeconds = Math.floor((Date.now() - timerStartTimeRef.current) / 1000);
+          setTimerSeconds(elapsedSeconds);
+
+          // Trigger liveness prompt if we crossed a 15-minute boundary
+          const current15MinBlock = Math.floor(elapsedSeconds / 900);
+          if (elapsedSeconds > 0 && current15MinBlock > lastLivenessCheckMarkRef.current) {
+            lastLivenessCheckMarkRef.current = current15MinBlock;
+            setShowLivenessCheck(true);
+          }
+        }
+      }, 500); // Poll every 500ms to stay extremely snappy and instantly sync when tab is reactivated
+    } else {
+      timerStartTimeRef.current = null;
+      if (interval) clearInterval(interval);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isTimerRunning, showLivenessCheck]);
+
   // Sync / Refresh helper
   const syncApplicationData = async () => {
     setIsRefreshing(true);
@@ -463,13 +561,15 @@ export default function App() {
       if (currentUser) {
         const timestamp = Date.now();
         if (currentUser.role === "student") {
-          // Load tests and student specific scores
-          const [testsRes, scoresRes] = await Promise.all([
+          // Load tests, student specific scores, and revision progress
+          const [testsRes, scoresRes, revisionRes] = await Promise.all([
             fetch(`/api/tests?t=${timestamp}`),
-            fetch(`/api/scores?studentUsername=${encodeURIComponent(currentUser.username)}&t=${timestamp}`)
+            fetch(`/api/scores?studentUsername=${encodeURIComponent(currentUser.username)}&t=${timestamp}`),
+            fetch(`/api/student/revision-data?studentUsername=${encodeURIComponent(currentUser.username)}&t=${timestamp}`)
           ]);
           const testsData = await testsRes.json();
           const scoresData = await scoresRes.json();
+          const revisionData = await revisionRes.json();
 
           if (testsData.success) {
             setTests(testsData.tests);
@@ -479,6 +579,12 @@ export default function App() {
           }
           if (scoresData.success) {
             setStudentScores(scoresData.scores);
+          }
+          if (revisionData.success) {
+            setRevisionSessions(revisionData.revisionSessions || []);
+            setExamAttempts(revisionData.examAttempts || []);
+            setRevisionServices(revisionData.revisionServices || []);
+            setRevisionServiceLogs(revisionData.revisionServiceLogs || []);
           }
         } else if (currentUser.role === "teacher") {
           // Load teacher panel summary metrics
@@ -672,6 +778,332 @@ export default function App() {
       }
     } catch (err) {
       showNotification("Network connection error. Please try again.", "error");
+    }
+  };
+
+  // Submit Revision Session
+  const handleRevisionSessionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (isSavingTopicLog) return;
+    if (!revDuration || !revTopic) {
+      showNotification("Please fill in the duration and topic.", "error");
+      return;
+    }
+    const durationMin = parseInt(revDuration);
+    if (isNaN(durationMin) || durationMin <= 0) {
+      showNotification("Duration must be a positive number of minutes.", "error");
+      return;
+    }
+
+    setIsSavingTopicLog(true);
+
+    const savedDuration = revDuration;
+    const savedTopic = revTopic;
+    const savedComment = revComment;
+    const savedRag = revRag;
+    const savedDate = revDate;
+
+    // Instantly reset input fields
+    setRevDuration("");
+    setRevTopic("");
+    setRevComment("");
+
+    try {
+      const response = await fetch("/api/student/revision-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentUsername: currentUser.username,
+          date: savedDate,
+          duration: durationMin,
+          topic: savedTopic,
+          rag: savedRag,
+          comment: savedComment
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification("Revision session logged successfully!", "success");
+        syncApplicationData();
+      } else {
+        showNotification(data.error || "Failed to log revision session.", "error");
+        // Restore values if failed
+        setRevDuration(savedDuration);
+        setRevTopic(savedTopic);
+        setRevComment(savedComment);
+      }
+    } catch (_) {
+      showNotification("Network error. Could not log session.", "error");
+      // Restore values if failed
+      setRevDuration(savedDuration);
+      setRevTopic(savedTopic);
+      setRevComment(savedComment);
+    } finally {
+      setIsSavingTopicLog(false);
+    }
+  };
+
+  // Submit Quick Revision from Live Timer
+  const handleQuickTimerLog = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!quickLogTopic) {
+      showNotification("Please enter a topic for the quick log.", "error");
+      return;
+    }
+    const mins = Math.max(1, Math.round(timerSeconds / 60));
+    try {
+      const response = await fetch("/api/student/revision-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentUsername: currentUser.username,
+          date: new Date().toISOString().split("T")[0],
+          duration: mins,
+          topic: quickLogTopic,
+          rag: quickLogRag,
+          comment: "Logged automatically via live revision timer."
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification(`Logged ${mins} mins of revision on "${quickLogTopic}"!`, "success");
+        setTimerSeconds(0);
+        setQuickLogTopic("");
+        setShowQuickLogForm(false);
+        syncApplicationData();
+      } else {
+        showNotification(data.error || "Failed to save session.", "error");
+      }
+    } catch (_) {
+      showNotification("Network error. Could not save session.", "error");
+    }
+  };
+
+  // Delete Revision Session
+  const handleRevisionSessionDelete = async (id: string) => {
+    requestConfirm(
+      "Purge Revision Session",
+      "Are you sure you want to remove this logged revision session?",
+      async () => {
+        try {
+          const response = await fetch(`/api/student/revision-session/${id}`, {
+            method: "DELETE"
+          });
+          if (response.ok) {
+            showNotification("Revision session purged successfully.", "success");
+            syncApplicationData();
+          } else {
+            showNotification("Failed to purge session.", "error");
+          }
+        } catch (_) {
+          showNotification("Network error. Could not delete session.", "error");
+        }
+      }
+    );
+  };
+
+  // Submit Exam question attempt
+  const handleExamAttemptSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (isSavingExamAttempt) return;
+    if (!examComponent || !examTopic || !examWording || !examMarksAvailable || !examMarksScored) {
+      showNotification("Please fill in all exam attempt fields.", "error");
+      return;
+    }
+    const marksAvail = parseFloat(examMarksAvailable);
+    const marksSc = parseFloat(examMarksScored);
+    const selfM = Math.round((marksSc / marksAvail) * 10) || 0;
+
+    if (isNaN(marksAvail) || marksAvail <= 0) {
+      showNotification("Marks available must be a positive number.", "error");
+      return;
+    }
+    if (isNaN(marksSc) || marksSc < 0 || marksSc > marksAvail) {
+      showNotification(`Self-assessed marks scored must be between 0 and ${marksAvail}.`, "error");
+      return;
+    }
+
+    setIsSavingExamAttempt(true);
+
+    const savedComponent = examComponent;
+    const savedTopic = examTopic;
+    const savedWording = examWording;
+    const savedMarksAvailable = examMarksAvailable;
+    const savedMarksScored = examMarksScored;
+    const savedSelfMark = examSelfMark;
+
+    // Reset input fields instantly to prevent double logging
+    setExamComponent("");
+    setExamTopic("");
+    setExamWording("");
+    setExamMarksAvailable("");
+    setExamMarksScored("");
+    setExamSelfMark("");
+
+    try {
+      const response = await fetch("/api/student/exam-attempt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentUsername: currentUser.username,
+          component: savedComponent,
+          topic: savedTopic,
+          questionWording: savedWording,
+          marksAvailable: marksAvail,
+          marksScored: marksSc,
+          selfMarkingScore: selfM,
+          date: examDate
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification("Exam question attempt logged successfully!", "success");
+        syncApplicationData();
+      } else {
+        showNotification(data.error || "Failed to log exam attempt.", "error");
+        // Restore values on failure
+        setExamComponent(savedComponent);
+        setExamTopic(savedTopic);
+        setExamWording(savedWording);
+        setExamMarksAvailable(savedMarksAvailable);
+        setExamMarksScored(savedMarksScored);
+        setExamSelfMark(savedSelfMark);
+      }
+    } catch (_) {
+      showNotification("Network error. Could not log exam attempt.", "error");
+      // Restore values on failure
+      setExamComponent(savedComponent);
+      setExamTopic(savedTopic);
+      setExamWording(savedWording);
+      setExamMarksAvailable(savedMarksAvailable);
+      setExamMarksScored(savedMarksScored);
+      setExamSelfMark(savedSelfMark);
+    } finally {
+      setIsSavingExamAttempt(false);
+    }
+  };
+
+  // Delete Exam question attempt
+  const handleExamAttemptDelete = async (id: string) => {
+    requestConfirm(
+      "Purge Exam Attempt",
+      "Are you sure you want to remove this logged exam attempt?",
+      async () => {
+        try {
+          const response = await fetch(`/api/student/exam-attempt/${id}`, {
+            method: "DELETE"
+          });
+          if (response.ok) {
+            showNotification("Exam attempt purged successfully.", "success");
+            syncApplicationData();
+          } else {
+            showNotification("Failed to purge attempt.", "error");
+          }
+        } catch (_) {
+          showNotification("Network error. Could not delete attempt.", "error");
+        }
+      }
+    );
+  };
+
+  // Register Revision service (external link)
+  const handleRegisterService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!newServiceName) {
+      showNotification("Please enter a service name.", "error");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/student/revision-service", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentUsername: currentUser.username,
+          name: newServiceName,
+          url: newServiceUrl
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification(`Revision service "${newServiceName}" registered!`, "success");
+        setNewServiceName("");
+        setNewServiceUrl("");
+        syncApplicationData();
+      } else {
+        showNotification(data.error || "Failed to register service.", "error");
+      }
+    } catch (_) {
+      showNotification("Network error. Could not register service.", "error");
+    }
+  };
+
+  // Delete Revision service
+  const handleServiceDelete = async (id: string) => {
+    requestConfirm(
+      "Remove Revision Service",
+      "Are you sure you want to remove this service? All matching logged durations will be deleted.",
+      async () => {
+        try {
+          const response = await fetch(`/api/student/revision-service/${id}`, {
+            method: "DELETE"
+          });
+          if (response.ok) {
+            showNotification("Revision service deleted successfully.", "success");
+            syncApplicationData();
+          } else {
+            showNotification("Failed to delete service.", "error");
+          }
+        } catch (_) {
+          showNotification("Network error. Could not delete service.", "error");
+        }
+      }
+    );
+  };
+
+  // Log duration on service
+  const handleLogServiceDurationSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!logServiceId || !logServiceDuration) {
+      showNotification("Please select a service and enter a duration.", "error");
+      return;
+    }
+    const durationMin = parseInt(logServiceDuration);
+    if (isNaN(durationMin) || durationMin <= 0) {
+      showNotification("Duration must be a positive number of minutes.", "error");
+      return;
+    }
+
+    const service = revisionServices.find(s => s.id === logServiceId);
+    if (!service) return;
+
+    try {
+      const response = await fetch("/api/student/revision-services/log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentUsername: currentUser.username,
+          serviceId: logServiceId,
+          serviceName: service.name,
+          duration: durationMin,
+          date: new Date().toISOString().split("T")[0]
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
+        setLogServiceDuration("");
+        syncApplicationData();
+      } else {
+        showNotification(data.error || "Failed to log service time.", "error");
+      }
+    } catch (_) {
+      showNotification("Network error. Could not log service time.", "error");
     }
   };
 
@@ -1040,6 +1472,42 @@ export default function App() {
     ];
   })();
 
+  // Calculation of weekly revision time
+  const getWeeklyMinutes = () => {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0); // Start of day 7 days ago
+    
+    const weeklySessions = revisionSessions.filter(s => {
+      const sDate = new Date(s.date);
+      return sDate >= sevenDaysAgo;
+    });
+    
+    const weeklyLogs = revisionServiceLogs.filter(l => {
+      const lDate = new Date(l.date);
+      return lDate >= sevenDaysAgo;
+    });
+    
+    const sessMins = weeklySessions.reduce((sum, s) => sum + s.duration, 0);
+    const logMins = weeklyLogs.reduce((sum, l) => sum + l.duration, 0);
+    
+    return sessMins + logMins;
+  };
+
+  const weeklyMinutes = getWeeklyMinutes();
+  const weeklyHours = (weeklyMinutes / 60).toFixed(1);
+
+  // RAG Dial calculation: <= 30 mins (red), 30 mins to 5h (amber), >= 5h (green)
+  let weeklyRag: "red" | "amber" | "green" = "red";
+  if (weeklyMinutes >= 300) {
+    weeklyRag = "green";
+  } else if (weeklyMinutes > 30) {
+    weeklyRag = "amber";
+  }
+
+  // Internal state for sub-tabs on revision panel
+  const [revSubTab, setRevSubTab] = useState<"log-sessions" | "exam-attempts">("log-sessions");
+
   return (
     <div className="min-h-screen bg-[#050506] text-neutral-200 flex flex-col font-sans transition-all selection:bg-purple-600/30 selection:text-purple-300">
       
@@ -1115,6 +1583,8 @@ export default function App() {
         config={config}
         onRefresh={syncApplicationData}
         isRefreshing={isRefreshing}
+        studentTab={studentTab}
+        setStudentTab={setStudentTab}
       />
 
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -1347,6 +1817,9 @@ export default function App() {
               )}
             </div>
 
+            {studentTab === "my-progress" && (
+              <div className="space-y-8 animate-fade-in">
+
             {/* Stats widgets & Record Marks Forms */}
             <div className="grid lg:grid-cols-12 gap-8">
               
@@ -1561,6 +2034,907 @@ export default function App() {
                 )}
               </div>
             </div>
+            </div>
+            )}
+
+            {studentTab === "revision-progress" && (
+              <div className="space-y-8 animate-fade-in">
+                {/* REVISION PROGRESS SECTION */}
+                <div className="grid lg:grid-cols-12 gap-8">
+                  {/* Left Column: Gauge Dial and External Services */}
+                  <div className="lg:col-span-4 space-y-8">
+                    {/* Gauge Dial Card */}
+                    {/* Gauge Dial Card */}
+                    {(() => {
+                      const eyeColor = weeklyMinutes >= 300 
+                        ? "#10b981" // glowing emerald green
+                        : weeklyMinutes > 30 
+                        ? "#f59e0b" // glowing golden yellow
+                        : "#ef4444"; // glowing crimson red
+
+                      const getEncouragingMessage = (mins: number) => {
+                        const percent = Math.min(Math.round((mins / 300) * 100), 100);
+                        if (percent >= 100) return "🏆 Goal Achieved! 5+ hours of legendary revision. You are a true champion!";
+                        if (percent >= 95) return "🎯 Just a few more minutes to go! You're on the absolute edge of victory!";
+                        if (percent >= 90) return "🔥 90%! Absolutely magnificent effort. Finish strong!";
+                        if (percent >= 85) return "🌟 So close to the Green Zone! Give it that final push!";
+                        if (percent >= 80) return "👑 4 Hours logged! Just one more hour to peak performance!";
+                        if (percent >= 75) return "💎 Three quarters done! You are truly dedicated.";
+                        if (percent >= 70) return "💫 70% completed! The Green Zone is within your sight now.";
+                        if (percent >= 65) return "📈 Consistency is key. You are making incredible progress!";
+                        if (percent >= 60) return "⚡ 3 Hours of revision logged! Your momentum is real.";
+                        if (percent >= 55) return "🐾 Step by step, paw by paw, you are getting closer!";
+                        if (percent >= 50) return "🌓 Halfway there! 2.5 hours of pure focus. Stellar job.";
+                        if (percent >= 45) return "🔥 Almost halfway to your weekly revision goal! You've got this.";
+                        if (percent >= 40) return "🎯 2 Hours achieved! Halfway mark is just around the corner.";
+                        if (percent >= 35) return "🚀 Keep climbing those steps! Small actions compound.";
+                        if (percent >= 30) return "🐱 The panther is watching your progress. You're doing great!";
+                        if (percent >= 25) return "🌟 A quarter of the way! Your effort is paying off.";
+                        if (percent >= 20) return "⚡ 1 Hour down! Look at you go. Keep pushing!";
+                        if (percent >= 15) return "🐾 Revise a little more — you're building a solid routine!";
+                        if (percent >= 10) return "💪 Nice work getting started! Every single minute counts.";
+                        if (percent >= 5) return "✨ A small step is still progress. Keep going!";
+                        return "🐾 Off to a fresh start! Every journey begins with a single step.";
+                      };
+
+                      return (
+                        <div className="bg-black border border-purple-950/60 rounded-3xl p-6 shadow-xl text-center relative overflow-hidden transition-all duration-300">
+                          <h3 className="text-sm font-semibold text-neutral-400 flex items-center justify-center space-x-2 mb-4 relative z-10">
+                            <Gauge className="w-4 h-4 text-purple-400 animate-pulse" />
+                            <span>Weekly Revision Dial</span>
+                          </h3>
+                          
+                          <div className="relative flex flex-col items-center justify-center h-64 w-64 mx-auto">
+                            <svg className="w-full h-full relative z-10" viewBox="0 0 120 115">
+                              {/* Defs for eye glow filter */}
+                              <defs>
+                                <filter id="eyeGlow" x="-30%" y="-30%" width="160%" height="160%">
+                                  <feGaussianBlur stdDeviation="3" result="blur" />
+                                  <feMerge>
+                                    <feMergeNode in="blur" />
+                                    <feMergeNode in="SourceGraphic" />
+                                  </feMerge>
+                                </filter>
+                              </defs>
+
+                              {/* Panther Ears */}
+                              <g className="transition-all duration-500 ease-in-out">
+                                {/* Left Ear */}
+                                <path
+                                  d="M 15,32 L 8,5 L 38,22 Z"
+                                  fill="#121212"
+                                  stroke="#2e2e2e"
+                                  strokeWidth="1.5"
+                                  strokeLinejoin="round"
+                                />
+                                <path
+                                  d="M 18,29 L 12,9 L 34,22 Z"
+                                  fill="#fda4af"
+                                  opacity="0.25"
+                                  stroke="#fda4af"
+                                  strokeWidth="0.5"
+                                  strokeLinejoin="round"
+                                />
+
+                                {/* Right Ear */}
+                                <path
+                                  d="M 105,32 L 112,5 L 82,22 Z"
+                                  fill="#121212"
+                                  stroke="#2e2e2e"
+                                  strokeWidth="1.5"
+                                  strokeLinejoin="round"
+                                />
+                                <path
+                                  d="M 102,29 L 108,9 L 86,22 Z"
+                                  fill="#fda4af"
+                                  opacity="0.25"
+                                  stroke="#fda4af"
+                                  strokeWidth="0.5"
+                                  strokeLinejoin="round"
+                                />
+                              </g>
+
+                              {/* Glowing Panther Eyes in Background */}
+                              <g className="transition-all duration-500 ease-in-out">
+                                {/* Left Eye Glow and Outline */}
+                                <path
+                                  d="M 28,45 C 32,39 44,39 48,45 C 44,51 32,51 28,45 Z"
+                                  fill={eyeColor}
+                                  opacity="0.2"
+                                  filter="url(#eyeGlow)"
+                                />
+                                <path
+                                  d="M 28,45 C 32,39 44,39 48,45 C 44,51 32,51 28,45 Z"
+                                  fill={eyeColor}
+                                  filter="url(#eyeGlow)"
+                                  className="transition-colors duration-500"
+                                />
+                                {/* Left pupil slit */}
+                                <path
+                                  d="M 38,41 Q 39.5,45 38,49 Q 36.5,45 38,41"
+                                  fill="#000000"
+                                />
+
+                                {/* Right Eye Glow and Outline */}
+                                <path
+                                  d="M 72,45 C 76,39 88,39 92,45 C 88,51 76,51 72,45 Z"
+                                  fill={eyeColor}
+                                  opacity="0.2"
+                                  filter="url(#eyeGlow)"
+                                />
+                                <path
+                                  d="M 72,45 C 76,39 88,39 92,45 C 88,51 76,51 72,45 Z"
+                                  fill={eyeColor}
+                                  filter="url(#eyeGlow)"
+                                  className="transition-colors duration-500"
+                                />
+                                {/* Right pupil slit */}
+                                <path
+                                  d="M 82,41 Q 83.5,45 82,49 Q 80.5,45 82,41"
+                                  fill="#000000"
+                                />
+                              </g>
+
+                              {/* Panther Nose and Mouth */}
+                              <g className="transition-all duration-500 ease-in-out">
+                                {/* Cute pink nose */}
+                                <path
+                                  d="M 56,54 H 64 L 60,59 Z"
+                                  fill="#fda4af"
+                                  stroke="#fda4af"
+                                  strokeWidth="0.5"
+                                  strokeLinejoin="round"
+                                />
+                                {/* Subtle Mouth Curves */}
+                                <path
+                                  d="M 60,59 L 60,61 A 3,3 0 0,0 57,64 M 60,61 A 3,3 0 0,1 63,64"
+                                  fill="none"
+                                  stroke="#2e2e2e"
+                                  strokeWidth="1"
+                                  strokeLinecap="round"
+                                />
+                              </g>
+
+                              {/* Panther Whiskers */}
+                              <g stroke="#333333" strokeWidth="0.75" strokeLinecap="round">
+                                {/* Left whiskers */}
+                                <line x1="50" y1="59" x2="22" y2="57" />
+                                <line x1="50" y1="61" x2="20" y2="62" />
+                                <line x1="50" y1="63" x2="23" y2="67" />
+                                
+                                {/* Right whiskers */}
+                                <line x1="70" y1="59" x2="98" y2="57" />
+                                <line x1="70" y1="61" x2="100" y2="62" />
+                                <line x1="70" y1="63" x2="97" y2="67" />
+                              </g>
+
+                              {/* Main background arc track (increased size by 20%) */}
+                              <path
+                                d="M 6,75 A 54,54 0 0,1 114,75"
+                                fill="none"
+                                className="stroke-neutral-900/80"
+                                strokeWidth="10"
+                                strokeLinecap="round"
+                              />
+                              
+                              {/* 3 Zones: Red (0-30), Amber (30-300), Green (300-360) with 20% increased radius (54) */}
+                              <g transform="rotate(180 60 75)">
+                                {/* Red Zone (0 to 30 mins) */}
+                                <circle
+                                  cx="60"
+                                  cy="75"
+                                  r="54"
+                                  fill="none"
+                                  stroke="#ef4444"
+                                  strokeWidth="10"
+                                  strokeDasharray="14.14 325.15"
+                                  strokeDashoffset="0"
+                                />
+                                {/* Amber Zone (30 to 300 mins) */}
+                                <circle
+                                  cx="60"
+                                  cy="75"
+                                  r="54"
+                                  fill="none"
+                                  stroke="#f59e0b"
+                                  strokeWidth="10"
+                                  strokeDasharray="127.23 212.06"
+                                  strokeDashoffset="-14.14"
+                                />
+                                {/* Green Zone (300 to 360 mins) */}
+                                <circle
+                                  cx="60"
+                                  cy="75"
+                                  r="54"
+                                  fill="none"
+                                  stroke="#10b981"
+                                  strokeWidth="10"
+                                  strokeDasharray="28.27 311.02"
+                                  strokeDashoffset="-141.37"
+                                />
+                              </g>
+
+                              {/* Black Cat's Paw Pointer (Hand) with 20% scaled length */}
+                              {(() => {
+                                const p = Math.min(weeklyMinutes / 360, 1);
+                                const angle = 180 + p * 180;
+                                return (
+                                  <g transform={`rotate(${angle} 60 75)`}>
+                                    {/* The black arm sleeve */}
+                                    <path
+                                      d="M 60,70 L 95,68 Q 107,70 107,75 Q 107,80 95,82 L 60,80 Z"
+                                      fill="#121212"
+                                      stroke="#1f1f1f"
+                                      strokeWidth="0.75"
+                                    />
+                                    {/* Toe backings (black) */}
+                                    <circle cx="102" cy="68" r="4.2" fill="#121212" />
+                                    <circle cx="107" cy="75" r="4.2" fill="#121212" />
+                                    <circle cx="102" cy="82" r="4.2" fill="#121212" />
+                                    
+                                    {/* The main pad (black) */}
+                                    <ellipse cx="92" cy="75" rx="8.5" ry="7.5" fill="#121212" />
+                                    
+                                    {/* Cute pink beans */}
+                                    <ellipse cx="91" cy="75" rx="5.5" ry="4.5" fill="#fda4af" />
+                                    <circle cx="102" cy="68" r="2.2" fill="#fda4af" />
+                                    <circle cx="107" cy="75" r="2.2" fill="#fda4af" />
+                                    <circle cx="102" cy="82" r="2.2" fill="#fda4af" />
+                                  </g>
+                                );
+                              })()}
+
+                              {/* Center Hub */}
+                              <circle cx="60" cy="75" r="7" fill="#121212" className="stroke-neutral-800 stroke-2" />
+                              <circle cx="60" cy="75" r="2.5" fill="#fda4af" />
+                            </svg>
+
+                            {/* Text readout centered overlay - positioned at the bottom below the rotation center */}
+                            <div className="absolute bottom-1 text-center left-0 right-0 z-10">
+                              <p className="text-2xl font-black text-white font-mono leading-none">{weeklyHours}h</p>
+                              <p className="text-[10px] font-mono text-neutral-400 font-extrabold mt-1.5 uppercase tracking-wider">{weeklyMinutes} / 300 mins</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 border-t border-purple-950/40 pt-4 text-left relative z-10">
+                            <p className="text-xs text-neutral-300 font-medium text-center leading-relaxed">
+                              {getEncouragingMessage(weeklyMinutes)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Live Revision Timer Card */}
+                    <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl text-center space-y-4">
+                      <h3 className="text-sm font-semibold text-neutral-400 flex items-center justify-center space-x-2 border-b border-purple-950/40 pb-3">
+                        <Clock className={`w-4 h-4 animate-pulse ${showLivenessCheck ? "text-red-500" : "text-purple-400"}`} />
+                        <span>Revision Stop Watch</span>
+                      </h3>
+                      
+                      <div className={`py-4 border rounded-2xl transition-all duration-300 ${
+                        showLivenessCheck 
+                          ? "bg-red-950/80 border-red-500/80 animate-pulse" 
+                          : "bg-black/40 border-purple-950/40"
+                      }`}>
+                        <div className={`text-3xl font-black font-mono tracking-widest transition-colors duration-300 ${
+                          showLivenessCheck ? "text-red-400 font-bold" : "text-purple-300"
+                        }`}>
+                          {formatTime(timerSeconds)}
+                        </div>
+                        {showLivenessCheck && (
+                          <div className="text-[10px] font-mono uppercase tracking-wider mt-1 text-red-300 animate-pulse">
+                            🚨 Liveness Confirmation Required
+                          </div>
+                        )}
+                      </div>
+
+                      {showLivenessCheck ? (
+                        <div className="p-4 bg-red-950/30 border border-red-900/50 rounded-2xl text-left space-y-3 animate-in fade-in duration-200">
+                          <p className="text-xs font-bold text-red-200 leading-relaxed">
+                            ⏱️ You've been revising for {Math.round(timerSeconds / 60)} minutes! Are you still going?
+                          </p>
+                          <p className="text-[10px] text-red-300/70">
+                            Confirm your study session to keep counting, or pause to take a short break.
+                          </p>
+                          <div className="flex gap-2.5 pt-1">
+                            <button
+                              onClick={() => {
+                                setShowLivenessCheck(false);
+                                setIsTimerRunning(true);
+                                showNotification("Awesome! Timer resumed. Keep up the great work!", "success");
+                              }}
+                              className="flex-1 bg-red-600 hover:bg-red-500 text-white py-1.5 px-3 rounded-xl text-xs font-bold transition active:scale-95 shadow-md shadow-red-950/50 cursor-pointer"
+                            >
+                              Yes, keep going!
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowLivenessCheck(false);
+                                setIsTimerRunning(false);
+                                showNotification("Timer paused. Take a well-deserved break!", "info");
+                              }}
+                              className="bg-neutral-900 hover:bg-neutral-800 border border-purple-950 text-neutral-300 py-1.5 px-3 rounded-xl text-xs font-semibold transition active:scale-95 cursor-pointer"
+                            >
+                              Pause & Break
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex justify-center items-center gap-3">
+                          <button
+                            onClick={() => setIsTimerRunning(!isTimerRunning)}
+                            className={`flex items-center justify-center p-3 rounded-full transition-all duration-200 active:scale-95 cursor-pointer ${
+                              isTimerRunning 
+                                ? "bg-amber-600 hover:bg-amber-500 text-white animate-pulse" 
+                                : "bg-purple-700 hover:bg-purple-650 text-white shadow-lg shadow-purple-500/10"
+                            }`}
+                            title={isTimerRunning ? "Pause Timer" : "Start Timer"}
+                          >
+                            {isTimerRunning ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setIsTimerRunning(false);
+                              setTimerSeconds(0);
+                              lastLivenessCheckMarkRef.current = 0;
+                              showNotification("Timer reset successfully.", "info");
+                            }}
+                            className="flex items-center justify-center p-3 rounded-full bg-neutral-900 hover:bg-neutral-800 border border-purple-950 text-neutral-400 hover:text-white transition-all active:scale-95 cursor-pointer"
+                            title="Reset Timer"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+
+                      {timerSeconds > 0 && (
+                        <div className="pt-2 border-t border-purple-950/30 space-y-2 animate-in fade-in duration-200">
+                          <button
+                            onClick={() => {
+                              setIsTimerRunning(false);
+                              const mins = Math.max(1, Math.round(timerSeconds / 60));
+                              setRevDuration(mins.toString());
+                              setRevSubTab("log-sessions");
+                              showNotification(`Loaded ${mins} minutes from study timer into Topic Revision form!`, "success");
+                            }}
+                            className="w-full bg-purple-950/80 hover:bg-purple-900 border border-purple-800/60 text-purple-300 py-2 rounded-xl text-xs font-bold transition active:scale-95"
+                          >
+                            Load Into Revision Form
+                          </button>
+                          
+                          {!showQuickLogForm ? (
+                            <button
+                              onClick={() => setShowQuickLogForm(true)}
+                              className="w-full bg-purple-700 hover:bg-purple-650 text-white py-2 rounded-xl text-xs font-bold transition active:scale-95"
+                            >
+                              ⚡ Quick Log Right Now
+                            </button>
+                          ) : (
+                            <form onSubmit={handleQuickTimerLog} className="space-y-2.5 p-3 bg-neutral-900/40 border border-purple-950/60 rounded-2xl text-left">
+                              <div>
+                                <label className="text-[9px] font-mono tracking-wider uppercase font-black text-purple-400 block mb-1">Topic Area</label>
+                                <input
+                                  type="text"
+                                  required
+                                  placeholder="e.g. Psychodynamic dream therapy"
+                                  value={quickLogTopic}
+                                  onChange={(e) => setQuickLogTopic(e.target.value)}
+                                  className="w-full bg-[#030304] border rounded-lg px-2.5 py-1.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] font-mono tracking-wider uppercase font-black text-purple-400 block mb-1">RAG Confidence</label>
+                                <select
+                                  value={quickLogRag}
+                                  onChange={(e) => setQuickLogRag(e.target.value as any)}
+                                  className="w-full bg-[#030304] border rounded-lg px-2 py-1 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                                >
+                                  <option value="green">🟢 Green (Strong)</option>
+                                  <option value="amber">🟡 Amber (Improving)</option>
+                                  <option value="red">🔴 Red (Needs work)</option>
+                                </select>
+                              </div>
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  type="submit"
+                                  className="flex-1 bg-purple-700 hover:bg-purple-650 text-white py-1.5 rounded-lg text-xs font-bold transition active:scale-95"
+                                >
+                                  Confirm Log
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowQuickLogForm(false)}
+                                  className="bg-neutral-800 hover:bg-neutral-700 text-neutral-400 py-1.5 px-2.5 rounded-lg text-xs transition active:scale-95"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* External Revision Services configuration */}
+                    <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl">
+                      <h3 className="text-sm font-semibold text-neutral-400 flex items-center space-x-2 mb-4 border-b border-purple-950/40 pb-3">
+                        <ExternalLink className="w-4 h-4 text-purple-400" />
+                        <span>Revision Hub Buttons</span>
+                      </h3>
+
+                      {/* Register new external service form */}
+                      <form onSubmit={handleRegisterService} className="space-y-3 mb-6">
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            required
+                            placeholder="Service Name (e.g., Seneca)"
+                            value={newServiceName}
+                            onChange={(e) => setNewServiceName(e.target.value)}
+                            className="w-full bg-[#030304] border rounded-lg px-3 py-2 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                          />
+                          <input
+                            type="text"
+                            placeholder="URL (optional)"
+                            value={newServiceUrl}
+                            onChange={(e) => setNewServiceUrl(e.target.value)}
+                            className="w-full bg-[#030304] border rounded-lg px-3 py-2 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          className="w-full bg-purple-950 hover:bg-purple-900 border border-purple-800 text-purple-300 py-1.5 rounded-lg text-xs font-semibold transition active:scale-[0.98]"
+                        >
+                          + Register New Rev Button
+                        </button>
+                      </form>
+
+                      {/* Registered Services list */}
+                      {revisionServices.length > 0 ? (
+                        <div className="space-y-3">
+                          <p className="text-[10px] font-mono uppercase tracking-wider text-purple-400 font-bold">Your Shortcuts & Mins Logged</p>
+                          <div className="grid grid-cols-1 gap-2.5">
+                            {revisionServices.map(service => {
+                              const totalMins = revisionServiceLogs
+                                .filter(l => l.serviceId === service.id)
+                                .reduce((sum, l) => sum + l.duration, 0);
+
+                              return (
+                                <div key={service.id} className="relative group bg-neutral-950 border border-purple-950/60 p-3 rounded-xl flex items-center justify-between hover:border-purple-800 transition">
+                                  <div className="max-w-[150px]">
+                                    <p className="font-bold text-white text-xs truncate">{service.name}</p>
+                                    <p className="text-[10px] text-purple-400 font-mono mt-0.5">{totalMins} mins logged</p>
+                                  </div>
+                                  
+                                  <div className="flex items-center space-x-1.5 z-10">
+                                    {service.url && (
+                                      <a
+                                        href={service.url.startsWith("http") ? service.url : `https://${service.url}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="h-7 w-7 flex items-center justify-center rounded bg-purple-950/50 hover:bg-purple-900 border border-purple-900/40 text-purple-300 transition"
+                                        title={`Launch ${service.name}`}
+                                      >
+                                        <ExternalLink className="w-3.5 h-3.5" />
+                                      </a>
+                                    )}
+                                    <button
+                                      onClick={() => setLogServiceId(service.id)}
+                                      className="h-7 px-2 flex items-center justify-center rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 text-[10px] transition font-semibold"
+                                      title="Quick-log revision duration"
+                                    >
+                                      + Log Time
+                                    </button>
+                                    <button
+                                      onClick={() => handleServiceDelete(service.id)}
+                                      className="h-7 w-7 flex items-center justify-center text-neutral-600 hover:text-red-400 transition"
+                                      title="Delete button configuration"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-xs text-neutral-600 italic">
+                          No custom shortcut revision buttons registered yet. Add Seneca, Quizlet, etc. above!
+                        </div>
+                      )}
+
+                      {/* Log time spent on selected service popover */}
+                      {logServiceId && (
+                        <div className="mt-5 border-t border-purple-950/40 pt-4 bg-purple-950/10 p-3 rounded-xl border border-purple-950/60">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-bold text-purple-300 font-mono uppercase">Log Revision Duration</p>
+                            <button
+                              onClick={() => {
+                                setLogServiceId("");
+                                setLogServiceDuration("");
+                              }}
+                              className="text-neutral-500 hover:text-neutral-300 text-xs"
+                            >
+                              ✕ Close
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-neutral-400 mb-2">
+                            Add study time for: <span className="font-bold text-white">{(revisionServices.find(s => s.id === logServiceId))?.name}</span>
+                          </p>
+                          <form onSubmit={handleLogServiceDurationSubmit} className="flex gap-2">
+                            <input
+                              type="number"
+                              required
+                              min="1"
+                              max="1440"
+                              placeholder="Minutes (e.g., 45)"
+                              value={logServiceDuration}
+                              onChange={(e) => setLogServiceDuration(e.target.value)}
+                              className="w-full bg-[#030304] border rounded-lg px-3 py-1.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="bg-purple-700 hover:bg-purple-650 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
+                            >
+                              Log
+                            </button>
+                          </form>
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+
+                  {/* Right Column: Revision sessions log book & Exam Question attempts */}
+                  <div className="lg:col-span-8 space-y-8">
+                    {/* Internal Subtabs switcher */}
+                    <div className="flex bg-neutral-950/50 p-1.5 rounded-xl border border-purple-950/50 gap-2">
+                      <button
+                        onClick={() => setRevSubTab("log-sessions")}
+                        className={`flex-1 text-center py-2 text-xs font-bold rounded-lg transition-all ${
+                          revSubTab === "log-sessions"
+                            ? "bg-purple-950 text-purple-300 border border-purple-800/40"
+                            : "text-neutral-400 hover:text-neutral-200"
+                        }`}
+                      >
+                        📖 Topic Revision Log
+                      </button>
+                      <button
+                        onClick={() => setRevSubTab("exam-attempts")}
+                        className={`flex-1 text-center py-2 text-xs font-bold rounded-lg transition-all ${
+                          revSubTab === "exam-attempts"
+                            ? "bg-purple-950 text-purple-300 border border-purple-800/40"
+                            : "text-neutral-400 hover:text-neutral-200"
+                        }`}
+                      >
+                        📝 Exam Question Log
+                      </button>
+                    </div>
+
+                    {/* Log Topic Revision Session form & list */}
+                    {revSubTab === "log-sessions" && (
+                      <div className="space-y-6 animate-fade-in">
+                        {/* Session log Form */}
+                        <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl">
+                          <h4 className="text-sm font-semibold text-white mb-4">Log A Topic Revision Session</h4>
+                          <form onSubmit={handleRevisionSessionSubmit} className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                            <div className="md:col-span-4 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Date Revised</label>
+                              <input
+                                type="date"
+                                required
+                                value={revDate}
+                                onChange={(e) => setRevDate(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-4 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Duration (Minutes)</label>
+                              <input
+                                type="number"
+                                required
+                                min="1"
+                                placeholder="e.g. 45"
+                                value={revDuration}
+                                onChange={(e) => setRevDuration(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-4 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">RAG Rating</label>
+                              <select
+                                value={revRag}
+                                onChange={(e) => setRevRag(e.target.value as any)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              >
+                                <option value="green">🟢 Green (Strong / Comfortable)</option>
+                                <option value="amber">🟡 Amber (Need improvement)</option>
+                                <option value="red">🔴 Red (Unconfident / Struggling)</option>
+                              </select>
+                            </div>
+                            <div className="md:col-span-12 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Topic Revised</label>
+                              <input
+                                type="text"
+                                required
+                                placeholder="e.g. Psychodynamic dream therapy"
+                                value={revTopic}
+                                onChange={(e) => setRevTopic(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-12 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Comments / Notes</label>
+                              <textarea
+                                placeholder="Detail what you revised, self assessment remarks, or key takeaways..."
+                                value={revComment}
+                                onChange={(e) => setRevComment(e.target.value)}
+                                rows={2}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                             <div className="md:col-span-12 pt-2">
+                              <motion.button
+                                type="submit"
+                                disabled={isSavingTopicLog}
+                                whileTap={{ scale: 0.95 }}
+                                whileHover={isSavingTopicLog ? {} : { scale: 1.01 }}
+                                className={`w-full py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md font-display uppercase tracking-wider flex items-center justify-center space-x-2 ${
+                                  isSavingTopicLog
+                                    ? "bg-purple-900/60 text-purple-400 cursor-not-allowed border border-purple-800/40"
+                                    : "bg-purple-700 hover:bg-purple-650"
+                                }`}
+                              >
+                                {isSavingTopicLog ? (
+                                  <>
+                                    <svg className="animate-spin h-4 w-4 text-purple-400" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                    </svg>
+                                    <span>Logging Session...</span>
+                                  </>
+                                ) : (
+                                  <span>Save Topic Session Log</span>
+                                )}
+                              </motion.button>
+                            </div>
+                          </form>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Log Exam Question Attempt form & list */}
+                    {revSubTab === "exam-attempts" && (
+                      <div className="space-y-6 animate-fade-in">
+                        {/* Exam question attempt log Form */}
+                        <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl">
+                          <h4 className="text-sm font-semibold text-white mb-4">Log Exam Question Attempt</h4>
+                          <form onSubmit={handleExamAttemptSubmit} className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                            <div className="md:col-span-4 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Exam Component</label>
+                              <input
+                                type="text"
+                                required
+                                placeholder="e.g. Paper 1 Section A"
+                                value={examComponent}
+                                onChange={(e) => setExamComponent(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-4 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Self-Assessed Marks Scored</label>
+                              <input
+                                type="number"
+                                required
+                                min="0"
+                                step="0.5"
+                                placeholder="e.g. 8"
+                                value={examMarksScored}
+                                onChange={(e) => setExamMarksScored(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-4 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Marks Available</label>
+                              <input
+                                type="number"
+                                required
+                                min="1"
+                                placeholder="e.g. 10"
+                                value={examMarksAvailable}
+                                onChange={(e) => setExamMarksAvailable(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-12 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Topic Area</label>
+                              <input
+                                type="text"
+                                required
+                                placeholder="e.g. Psychodynamic dream therapy"
+                                value={examTopic}
+                                onChange={(e) => setExamTopic(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-12 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Wording of the Question</label>
+                              <textarea
+                                required
+                                placeholder="Enter the exact or paraphrased wording of the exam question..."
+                                value={examWording}
+                                onChange={(e) => setExamWording(e.target.value)}
+                                rows={2}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-12 pt-2">
+                              <motion.button
+                                type="submit"
+                                disabled={isSavingExamAttempt}
+                                whileTap={{ scale: 0.95 }}
+                                whileHover={isSavingExamAttempt ? {} : { scale: 1.01 }}
+                                className={`w-full py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md font-display uppercase tracking-wider flex items-center justify-center space-x-2 ${
+                                  isSavingExamAttempt
+                                    ? "bg-purple-900/60 text-purple-400 cursor-not-allowed border border-purple-800/40"
+                                    : "bg-purple-700 hover:bg-purple-650"
+                                }`}
+                              >
+                                {isSavingExamAttempt ? (
+                                  <>
+                                    <svg className="animate-spin h-4 w-4 text-purple-400" fill="none" viewBox="0 0 24 24">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                    </svg>
+                                    <span>Saving Attempt...</span>
+                                  </>
+                                ) : (
+                                  <span>Save Exam Question Attempt</span>
+                                )}
+                              </motion.button>
+                            </div>
+                          </form>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Unified Cumulative Revision & Exam History Log */}
+                    {(() => {
+                      const cumulativeLogs = [
+                        ...revisionSessions.map(s => ({
+                          id: `session-${s.id}`,
+                          originalId: s.id,
+                          type: "topic" as const,
+                          date: s.date,
+                          title: s.topic,
+                          details: s.comment,
+                          badge: s.rag ? s.rag.toUpperCase() : "GREEN",
+                          badgeColor: s.rag === "green" 
+                            ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                            : s.rag === "amber" 
+                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                            : "bg-red-500/10 text-red-400 border border-red-500/20",
+                          meta: `${s.duration} mins`,
+                          rag: s.rag,
+                        })),
+                        ...examAttempts.map(e => ({
+                          id: `exam-${e.id}`,
+                          originalId: e.id,
+                          type: "exam" as const,
+                          date: e.date,
+                          title: `${e.component} - ${e.topic}`,
+                          details: e.questionWording ? `Question: ${e.questionWording}` : "Exam question attempt",
+                          badge: `Exam Score: ${e.marksScored}/${e.marksAvailable}`,
+                          badgeColor: "bg-purple-950 border border-purple-800 text-purple-300",
+                          meta: `Self-Assessed Marks`,
+                          rag: undefined,
+                        }))
+                      ].sort((a, b) => b.date.localeCompare(a.date));
+
+                      const filteredCumulativeLogs = cumulativeLogs.filter(log => {
+                        const query = cumulativeSearch.trim().toLowerCase();
+                        if (!query) return true;
+                        return (
+                          log.title.toLowerCase().includes(query) ||
+                          (log.details && log.details.toLowerCase().includes(query)) ||
+                          log.date.includes(query) ||
+                          log.type.toLowerCase().includes(query) ||
+                          (log.rag && log.rag.toLowerCase().includes(query)) ||
+                          log.badge.toLowerCase().includes(query)
+                        );
+                      });
+
+                      return (
+                        <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-purple-950/40 pb-4">
+                            <div>
+                              <h4 className="text-sm font-semibold text-white">Revision Log</h4>
+                            </div>
+                            
+                            {/* Keyword Filter Input */}
+                            <div className="relative max-w-xs w-full">
+                              <Search className="absolute left-3 top-2.5 h-4 w-4 text-neutral-400" />
+                              <input
+                                type="text"
+                                placeholder="Search by keywords..."
+                                value={cumulativeSearch}
+                                onChange={(e) => setCumulativeSearch(e.target.value)}
+                                className="w-full bg-[#030304] border border-purple-950/80 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-neutral-500 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          {filteredCumulativeLogs.length > 0 ? (
+                            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+                              {filteredCumulativeLogs.map((log) => (
+                                <div
+                                  key={log.id}
+                                  className="bg-neutral-950 border border-purple-950/40 p-4 rounded-2xl flex flex-col sm:flex-row justify-between sm:items-start gap-4 transition hover:bg-purple-950/10"
+                                >
+                                  <div className="space-y-2 flex-1">
+                                    <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
+                                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase ${
+                                        log.type === "topic" 
+                                          ? "bg-purple-950 text-purple-400 border border-purple-900" 
+                                          : "bg-blue-950 text-blue-400 border border-blue-900"
+                                      }`}>
+                                        {log.type === "topic" ? "📖 Topic" : "📝 Exam Question"}
+                                      </span>
+                                      <span className="text-neutral-700">•</span>
+                                      <span className="text-xs font-semibold text-white">{log.title}</span>
+                                    </div>
+                                    
+                                    {log.details && (
+                                      <p className="text-xs text-neutral-300 italic">"{log.details}"</p>
+                                    )}
+
+                                    <div className="flex items-center space-x-3 text-[10px] text-neutral-500 font-mono">
+                                      <span>Date: {log.date}</span>
+                                      {log.type === "topic" && (
+                                        <>
+                                          <span>•</span>
+                                          <span>Duration: {log.meta}</span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center space-x-3 self-end sm:self-auto">
+                                    <span className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-md ${log.badgeColor}`}>
+                                      {log.badge}
+                                    </span>
+                                    <button
+                                      onClick={() => {
+                                        if (log.type === "topic") {
+                                          handleRevisionSessionDelete(log.originalId);
+                                        } else {
+                                          handleExamAttemptDelete(log.originalId);
+                                        }
+                                      }}
+                                      className="text-neutral-500 hover:text-red-400 transition p-1.5 rounded-md"
+                                      title={`Delete ${log.type === "topic" ? "revision session" : "exam attempt"}`}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-center py-12 text-xs text-neutral-600 italic">
+                              {cumulativeSearch ? "No entries match your search." : "Your cumulative revision history is empty. Log a topic session or exam question above!"}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                  </div>
+                </div>
+              </div>
+            )}
 
           </div>
         )}
@@ -1570,13 +2944,42 @@ export default function App() {
           <div className="space-y-8 animate-fade-in">
             
             {/* Greetings Bar */}
-            <div className="pb-6 border-b border-purple-950/40">
-              <span className="text-xs font-mono text-amber-500 font-bold uppercase tracking-wider">Authorized Supervisor Session</span>
-              <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-white mt-1">
-                Black Panther Command <span className="text-amber-500">Center</span>
-              </h2>
-              <p className="text-xs text-neutral-400 mt-1">Real-time class groupings analytics, assessments releases, and individual grade sheets management.</p>
+            <div className="pb-6 border-b border-purple-950/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <span className="text-xs font-mono text-amber-500 font-bold uppercase tracking-wider">Authorized Supervisor Session</span>
+                <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-white mt-1">
+                  Black Panther Command <span className="text-amber-500">Center</span>
+                </h2>
+                <p className="text-xs text-neutral-400 mt-1">Real-time class groupings analytics, assessments releases, and individual grade sheets management.</p>
+              </div>
             </div>
+
+            {/* Tab switch between Assessments and Revision Progress */}
+            <div className="flex flex-wrap border-b border-purple-950/60 gap-2">
+              <button
+                onClick={() => setTeacherViewTab("assessments")}
+                className={`pb-3 px-5 text-sm font-semibold border-b-2 transition-all duration-200 ${
+                  teacherViewTab === "assessments"
+                    ? "border-amber-500 text-amber-400"
+                    : "border-transparent text-neutral-400 hover:text-neutral-200"
+                }`}
+              >
+                📊 Assessments Dashboard
+              </button>
+              <button
+                onClick={() => setTeacherViewTab("revision-progress")}
+                className={`pb-3 px-5 text-sm font-semibold border-b-2 transition-all duration-200 ${
+                  teacherViewTab === "revision-progress"
+                    ? "border-amber-500 text-amber-400"
+                    : "border-transparent text-neutral-400 hover:text-neutral-200"
+                }`}
+              >
+                📖 Revision Tracker Dashboard
+              </button>
+            </div>
+
+            {teacherViewTab === "assessments" && (
+              <div className="space-y-8 animate-fade-in">
 
             {/* Top Stat Overview Grid */}
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -2800,6 +4203,398 @@ export default function App() {
                 )}
               </div>
             </div>
+            </div>
+            )}
+
+            {teacherViewTab === "revision-progress" && (() => {
+              // Extract revision arrays safely
+              const sessions = teacherData.revisionSessions || [];
+              const logs = teacherData.revisionServiceLogs || [];
+              const attempts = teacherData.examAttempts || [];
+              const students = teacherData.students || [];
+
+              // 1. Overall stats
+              const totalMins = sessions.reduce((sum, s) => sum + s.duration, 0) + logs.reduce((sum, l) => sum + l.duration, 0);
+              const totalHours = (totalMins / 60).toFixed(1);
+              const avgMinsPerStudent = students.length > 0 ? Math.round(totalMins / students.length) : 0;
+              const avgHoursPerStudent = (avgMinsPerStudent / 60).toFixed(1);
+
+              // 2. Weekly change graph (past 7 days activity)
+              // Create map of past 7 days
+              const dailyActivity: { [dateStr: string]: number } = {};
+              const daysList: string[] = [];
+              for (let i = 6; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                const dStr = d.toISOString().split("T")[0];
+                dailyActivity[dStr] = 0;
+                daysList.push(dStr);
+              }
+
+              // Populating daily activity from sessions and logs
+              sessions.forEach(s => {
+                if (dailyActivity[s.date] !== undefined) {
+                  dailyActivity[s.date] += s.duration;
+                }
+              });
+              logs.forEach(l => {
+                if (dailyActivity[l.date] !== undefined) {
+                  dailyActivity[l.date] += l.duration;
+                }
+              });
+
+              const activityChartData = daysList.map(date => {
+                // Shorten date for chart labels e.g. "07/14"
+                const parts = date.split("-");
+                const label = parts.length >= 3 ? `${parts[1]}/${parts[2]}` : date;
+                return {
+                  dateStr: label,
+                  "Revision Minutes": dailyActivity[date]
+                };
+              });
+
+              // 3. Comparison across groups (A, B, C, D, E)
+              const groupMap: { [group: string]: { totalMins: number; count: number } } = {
+                A: { totalMins: 0, count: 0 },
+                B: { totalMins: 0, count: 0 },
+                C: { totalMins: 0, count: 0 },
+                D: { totalMins: 0, count: 0 },
+                E: { totalMins: 0, count: 0 }
+              };
+
+              // Count students per group
+              students.forEach(s => {
+                const g = s.classGroup || "A";
+                if (groupMap[g]) groupMap[g].count++;
+              });
+
+              // Aggregate minutes per group
+              sessions.forEach(s => {
+                const sStudent = students.find(x => x.username === s.studentUsername);
+                const g = sStudent?.classGroup || "A";
+                if (groupMap[g]) groupMap[g].totalMins += s.duration;
+              });
+              logs.forEach(l => {
+                const lStudent = students.find(x => x.username === l.studentUsername);
+                const g = lStudent?.classGroup || "A";
+                if (groupMap[g]) groupMap[g].totalMins += l.duration;
+              });
+
+              const groupChartData = Object.keys(groupMap).map(g => {
+                const info = groupMap[g];
+                const avg = info.count > 0 ? Math.round(info.totalMins / info.count) : 0;
+                return {
+                  group: `Group ${g}`,
+                  "Total Hours": parseFloat((info.totalMins / 60).toFixed(1)),
+                  "Avg Minutes/Student": avg
+                };
+              });
+
+              return (
+                <div className="space-y-8 animate-fade-in">
+                  {/* Top Stats Overview */}
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div className="bg-neutral-950/70 border border-purple-950 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+                      <Gauge className="absolute right-4 top-4 text-purple-900/40 w-10 h-10 animate-pulse" />
+                      <p className="text-xs font-mono text-neutral-500 uppercase">Total Logged Revision</p>
+                      <p className="text-2xl font-black text-white mt-2">{totalHours} Hours</p>
+                      <div className="text-[10px] text-purple-400 mt-1 font-mono">Cumulative study time cohort-wide</div>
+                    </div>
+
+                    <div className="bg-neutral-950/70 border border-purple-950 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+                      <Award className="absolute right-4 top-4 text-purple-900/40 w-10 h-10" />
+                      <p className="text-xs font-mono text-neutral-500 uppercase">Average study per student</p>
+                      <p className="text-2xl font-black text-purple-300 mt-2">{avgHoursPerStudent} Hours</p>
+                      <div className="text-[10px] text-purple-400 mt-1 font-mono">Average logged per student user</div>
+                    </div>
+
+                    <div className="bg-neutral-950/70 border border-purple-950 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+                      <BookOpen className="absolute right-4 top-4 text-purple-900/40 w-10 h-10" />
+                      <p className="text-xs font-mono text-neutral-500 uppercase">Topic Sessions</p>
+                      <p className="text-2xl font-black text-amber-400 mt-2">{sessions.length}</p>
+                      <div className="text-[10px] text-amber-500/70 mt-1 font-mono">Self-logged revision sessions</div>
+                    </div>
+
+                    <div className="bg-neutral-950/70 border border-purple-950 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+                      <CheckCircle className="absolute right-4 top-4 text-purple-900/40 w-10 h-10" />
+                      <p className="text-xs font-mono text-neutral-500 uppercase">Logged Exam Questions</p>
+                      <p className="text-2xl font-black text-emerald-400 mt-2">{attempts.length}</p>
+                      <div className="text-[10px] text-emerald-500/70 mt-1 font-mono">Exam question attempts logged</div>
+                    </div>
+                  </div>
+
+                  {/* Graphs section */}
+                  <div className="grid lg:grid-cols-12 gap-8">
+                    {/* Weekly change graph (Daily activity) */}
+                    <div className="lg:col-span-6 bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl flex flex-col justify-between min-h-[360px]">
+                      <div>
+                        <h3 className="text-sm font-semibold text-neutral-300 flex items-center space-x-2">
+                          <TrendingUp className="w-4 h-4 text-amber-500" />
+                          <span>Weekly Change & Daily Revision Trend</span>
+                        </h3>
+                        <p className="text-xs text-neutral-500 mt-1">Total minutes logged per day over the past 7 days</p>
+                      </div>
+
+                      <div className="flex-1 h-56 pt-6">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={activityChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                            <defs>
+                              <linearGradient id="colorActivity" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#d97706" stopOpacity={0.4}/>
+                                <stop offset="95%" stopColor="#d97706" stopOpacity={0.0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#22123b" />
+                            <XAxis dataKey="dateStr" stroke="#6d28d9" fontSize={10} fontFamily="monospace" />
+                            <YAxis stroke="#6d28d9" fontSize={10} fontFamily="monospace" />
+                            <Tooltip contentStyle={{ backgroundColor: "#090514", borderColor: "#4c1d95", color: "#fff" }} />
+                            <Area type="monotone" dataKey="Revision Minutes" stroke="#f59e0b" strokeWidth={2} fillOpacity={1} fill="url(#colorActivity)" />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    {/* Comparison across groups */}
+                    <div className="lg:col-span-6 bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl flex flex-col justify-between min-h-[360px]">
+                      <div>
+                        <h3 className="text-sm font-semibold text-neutral-300 flex items-center space-x-2">
+                          <TrendingUp className="w-4 h-4 text-purple-400" />
+                          <span>Group Study Comparison</span>
+                        </h3>
+                        <p className="text-xs text-neutral-500 mt-1">Average minutes of revision logged per student in each Group</p>
+                      </div>
+
+                      <div className="flex-1 h-56 pt-6">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={groupChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#22123b" />
+                            <XAxis dataKey="group" stroke="#6d28d9" fontSize={10} fontFamily="monospace" />
+                            <YAxis stroke="#6d28d9" fontSize={10} fontFamily="monospace" />
+                            <Tooltip contentStyle={{ backgroundColor: "#090514", borderColor: "#4c1d95", color: "#fff" }} />
+                            <Bar dataKey="Avg Minutes/Student" fill="#a78bfa" radius={[4, 4, 0, 0]} maxBarSize={45} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Detailed roster table for students' revision tracking */}
+                  <div className="bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl">
+                    <div className="pb-4 border-b border-purple-950/40 mb-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                      <div>
+                        <h3 className="text-sm font-semibold text-neutral-300">Detailed Student Revision Ledger</h3>
+                        <p className="text-xs text-neutral-500 mt-1">Check individual revision metrics, RAG badges, exam question logs, and scroll down to details</p>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-purple-950/60 text-purple-400/80 uppercase tracking-wider font-mono">
+                            <th className="py-3 px-4">Student</th>
+                            <th className="py-3 px-4 text-center">Class / Group</th>
+                            <th className="py-3 px-4 text-center">Total Hours Logged</th>
+                            <th className="py-3 px-4 text-center">Weekly Minutes</th>
+                            <th className="py-3 px-4 text-center">Weekly status</th>
+                            <th className="py-3 px-4 text-center">Exam logs</th>
+                            <th className="py-3 px-4 text-right">Action View</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-950/30 text-neutral-300">
+                          {students.map(st => {
+                            // Compute student-specific metrics
+                            const studSessions = sessions.filter(s => s.studentUsername.toLowerCase() === st.username.toLowerCase());
+                            const studLogs = logs.filter(l => l.studentUsername.toLowerCase() === st.username.toLowerCase());
+                            const studAttempts = attempts.filter(a => a.studentUsername.toLowerCase() === st.username.toLowerCase());
+
+                            const studTotalMins = studSessions.reduce((sum, s) => sum + s.duration, 0) + studLogs.reduce((sum, l) => sum + l.duration, 0);
+                            const studTotalHours = (studTotalMins / 60).toFixed(1);
+
+                            // Compute weekly study time for student
+                            const sevenDaysAgo = new Date();
+                            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                            sevenDaysAgo.setHours(0, 0, 0, 0);
+
+                            const studWeeklySessionsMins = studSessions
+                              .filter(s => new Date(s.date) >= sevenDaysAgo)
+                              .reduce((sum, s) => sum + s.duration, 0);
+                            const studWeeklyLogsMins = studLogs
+                              .filter(l => new Date(l.date) >= sevenDaysAgo)
+                              .reduce((sum, l) => sum + l.duration, 0);
+
+                            const studWeeklyMins = studWeeklySessionsMins + studWeeklyLogsMins;
+
+                            let stWeeklyRag: "red" | "amber" | "green" = "red";
+                            if (studWeeklyMins >= 300) {
+                              stWeeklyRag = "green";
+                            } else if (studWeeklyMins > 30) {
+                              stWeeklyRag = "amber";
+                            }
+
+                            return (
+                              <tr key={st.username} className="hover:bg-purple-950/10 transition">
+                                <td className="py-3.5 px-4 font-semibold text-white">
+                                  {st.nickname} <span className="text-[10px] text-neutral-500 font-mono">({st.username})</span>
+                                </td>
+                                <td className="py-3.5 px-4 text-center text-neutral-400 font-mono">
+                                  Group {st.classGroup} • {st.academicYear}
+                                </td>
+                                <td className="py-3.5 px-4 text-center font-mono text-white font-bold">
+                                  {studTotalHours} hrs
+                                </td>
+                                <td className="py-3.5 px-4 text-center font-mono">
+                                  {studWeeklyMins} mins
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <span className={`inline-block px-2.5 py-0.5 rounded-full text-[9px] font-mono font-black ${
+                                    stWeeklyRag === "green"
+                                      ? "bg-green-500/10 text-green-400"
+                                      : stWeeklyRag === "amber"
+                                      ? "bg-amber-500/10 text-amber-400"
+                                      : "bg-red-500/10 text-red-400"
+                                  }`}>
+                                    {stWeeklyRag === "green" ? "🟢 GREEN (5h+)" : stWeeklyRag === "amber" ? "🟡 AMBER" : "🔴 RED (<30m)"}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-center font-mono text-neutral-400">
+                                  {studAttempts.length} questions
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  <button
+                                    onClick={() => {
+                                      // Set selected student on the chart and simulate opening their details
+                                      setSelectedChartStudent(st.username);
+                                      showNotification(`Viewing individual log history for ${st.nickname}`, "info");
+                                      
+                                      // Set window scroll to the detail viewer below
+                                      setTimeout(() => {
+                                        const detailEl = document.getElementById("individual-revision-viewer");
+                                        if (detailEl) {
+                                          detailEl.scrollIntoView({ behavior: "smooth" });
+                                        }
+                                      }, 50);
+                                    }}
+                                    className="px-3 py-1 bg-purple-900/40 hover:bg-purple-900 border border-purple-800 text-purple-300 rounded text-[10px] font-semibold transition active:scale-95"
+                                  >
+                                    View Log history
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Individual Revision Viewer detail panel */}
+                  {selectedChartStudent && (() => {
+                    const selectedStudentObj = students.find(s => s.username === selectedChartStudent);
+                    if (!selectedStudentObj) return null;
+
+                    const sSessions = sessions.filter(s => s.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase());
+                    const sAttempts = attempts.filter(a => a.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase());
+
+                    return (
+                      <div id="individual-revision-viewer" className="bg-[#050308]/60 backdrop-blur-md rounded-3xl border border-purple-950/80 p-6 shadow-2xl animate-fade-in space-y-6">
+                        <div className="pb-4 border-b border-purple-950/40 flex justify-between items-center flex-wrap gap-4">
+                          <div>
+                            <span className="text-[10px] font-mono text-purple-400 font-bold uppercase tracking-wider">Candidate Detailed Dossier</span>
+                            <h4 className="font-display text-lg font-bold text-white mt-1">
+                              Revision Log History for <span className="text-purple-350">{selectedStudentObj.nickname}</span>
+                            </h4>
+                            <p className="text-[11px] text-neutral-400">Review detailed study topic sessions, revision comments, and marked exam question attempts</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setSelectedChartStudent(students[0]?.username || "");
+                            }}
+                            className="px-3 py-1 bg-neutral-900 hover:bg-neutral-800 text-neutral-400 rounded text-[10px] border border-neutral-800 transition"
+                          >
+                            Reset Selection
+                          </button>
+                        </div>
+
+                        <div className="grid lg:grid-cols-2 gap-8">
+                          {/* Student Topic Revision Logs */}
+                          <div className="space-y-4">
+                            <h5 className="text-xs font-mono tracking-wider uppercase font-bold text-purple-400 flex items-center space-x-2">
+                              <span>📖 Study Topic Sessions ({sSessions.length})</span>
+                            </h5>
+                            
+                            {sSessions.length > 0 ? (
+                              <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-2">
+                                {sSessions.slice().reverse().map(sess => (
+                                  <div key={sess.id} className="bg-neutral-950/50 border border-purple-950/40 p-3 rounded-xl space-y-1.5">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-bold text-white truncate max-w-[200px]">{sess.topic}</span>
+                                      <span className={`px-2 py-0.2 text-[8px] font-mono font-black rounded uppercase ${
+                                        sess.rag === "green"
+                                          ? "bg-green-500/10 text-green-400"
+                                          : sess.rag === "amber"
+                                          ? "bg-amber-500/10 text-amber-400"
+                                          : "bg-red-500/10 text-red-500"
+                                      }`}>
+                                        {sess.rag}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-neutral-400 italic">"{sess.comment || "No commentary logged."}"</p>
+                                    <div className="flex items-center space-x-4 text-[9px] text-neutral-500 font-mono">
+                                      <span>Date: {sess.date}</span>
+                                      <span>Duration: {sess.duration} mins</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-center py-8 text-neutral-600 bg-neutral-950/20 border border-dashed border-purple-950/30 rounded-xl text-xs italic">
+                                No self-logged study sessions recorded.
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Student Marked Exam attempts */}
+                          <div className="space-y-4">
+                            <h5 className="text-xs font-mono tracking-wider uppercase font-bold text-purple-400 flex items-center space-x-2">
+                              <span>📝 Exam Question Attempts ({sAttempts.length})</span>
+                            </h5>
+
+                            {sAttempts.length > 0 ? (
+                              <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-2">
+                                {sAttempts.slice().reverse().map(attempt => {
+                                  const percentage = Math.round((attempt.marksScored / attempt.marksAvailable) * 100);
+                                  return (
+                                    <div key={attempt.id} className="bg-neutral-950/50 border border-purple-950/40 p-3 rounded-xl space-y-2">
+                                      <div className="flex items-center justify-between text-xs font-semibold text-white">
+                                        <span>{attempt.component}</span>
+                                        <span className="text-purple-350 font-mono">{attempt.marksScored} / {attempt.marksAvailable} marks ({percentage}%)</span>
+                                      </div>
+                                      <p className="text-xs text-neutral-400">Topic: <span className="text-neutral-200">{attempt.topic}</span></p>
+                                      <p className="text-[11px] text-neutral-300 bg-neutral-950 border border-purple-950/35 p-2 rounded-lg italic">
+                                        "{attempt.questionWording}"
+                                      </p>
+                                      <div className="flex items-center justify-between text-[10px] text-neutral-500 font-mono">
+                                        <span>Self-Mark: {attempt.selfMarkingScore}/10</span>
+                                        <span>Logged: {attempt.date}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="text-center py-8 text-neutral-600 bg-neutral-950/20 border border-dashed border-purple-950/30 rounded-xl text-xs italic">
+                                No exam questions attempts registered.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                </div>
+              );
+            })()}
 
           </div>
         )}
@@ -2815,7 +4610,7 @@ export default function App() {
                 The Wild Cat <span className="text-purple-400">Arena</span>
               </h2>
               <p className="text-xs text-neutral-400 mt-1">
-                Live ranking against your peers
+                A high-privacy tracking platform which preserves student confidentiality using generated wild cat names. Compare overall weighted average performances across all class groups.
               </p>
             </div>
 
