@@ -1,4 +1,4 @@
-import { LogOut, Shield, Award, User } from "lucide-react";
+import { LogOut, Shield, Award, User, BookOpen } from "lucide-react";
 import { motion } from "motion/react";
 // @ts-ignore
 import pantherLogo from "../assets/images/panther_logo_1782473515224.jpg";
@@ -17,6 +17,8 @@ interface HeaderProps {
   config: { hasSupabase: boolean; supabaseUrl: string | null };
   onRefresh: () => void;
   isRefreshing: boolean;
+  studentTab?: "my-progress" | "wild-cat-arena" | "revision-progress";
+  setStudentTab?: (tab: "my-progress" | "wild-cat-arena" | "revision-progress") => void;
 }
 
 export default function Header({
@@ -26,7 +28,9 @@ export default function Header({
   setCurrentPage,
   config,
   onRefresh,
-  isRefreshing
+  isRefreshing,
+  studentTab,
+  setStudentTab
 }: HeaderProps) {
   return (
     <header className="border-b border-purple-950 bg-neutral-950/80 backdrop-blur-md sticky top-0 z-50">
@@ -60,15 +64,32 @@ export default function Header({
               {user.role === "student" && (
                 <>
                   <button
-                    onClick={() => setCurrentPage("student-dashboard")}
+                    onClick={() => {
+                      setCurrentPage("student-dashboard");
+                      if (setStudentTab) setStudentTab("my-progress");
+                    }}
                     className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      currentPage === "student-dashboard"
+                      currentPage === "student-dashboard" && studentTab === "my-progress"
                         ? "bg-purple-950/80 text-purple-300 border border-purple-800/50"
                         : "text-neutral-400 hover:text-purple-300 hover:bg-purple-950/20"
                     }`}
                   >
                     <User className="w-4 h-4" />
                     <span>My Progress</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCurrentPage("student-dashboard");
+                      if (setStudentTab) setStudentTab("revision-progress");
+                    }}
+                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      currentPage === "student-dashboard" && studentTab === "revision-progress"
+                        ? "bg-purple-950/80 text-purple-300 border border-purple-800/50"
+                        : "text-neutral-400 hover:text-purple-300 hover:bg-purple-950/20"
+                    }`}
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    <span>Revision Progress</span>
                   </button>
                   <button
                     onClick={() => setCurrentPage("leaderboard")}
@@ -145,13 +166,29 @@ export default function Header({
               <>
                 <button
                   id="mobile-btn-progress"
-                  onClick={() => setCurrentPage("student-dashboard")}
+                  onClick={() => {
+                    setCurrentPage("student-dashboard");
+                    if (setStudentTab) setStudentTab("my-progress");
+                  }}
                   className={`flex flex-col items-center justify-center py-1 text-[11px] font-semibold transition ${
-                    currentPage === "student-dashboard" ? "text-purple-300 font-bold" : "text-neutral-500 hover:text-neutral-300"
+                    currentPage === "student-dashboard" && studentTab === "my-progress" ? "text-purple-300 font-bold" : "text-neutral-500 hover:text-neutral-300"
                   }`}
                 >
                   <User className="w-4 h-4 mb-0.5" />
                   <span>My Progress</span>
+                </button>
+                <button
+                  id="mobile-btn-revision"
+                  onClick={() => {
+                    setCurrentPage("student-dashboard");
+                    if (setStudentTab) setStudentTab("revision-progress");
+                  }}
+                  className={`flex flex-col items-center justify-center py-1 text-[11px] font-semibold transition ${
+                    currentPage === "student-dashboard" && studentTab === "revision-progress" ? "text-purple-300 font-bold" : "text-neutral-500 hover:text-neutral-300"
+                  }`}
+                >
+                  <BookOpen className="w-4 h-4 mb-0.5" />
+                  <span>Revision</span>
                 </button>
                 <button
                   id="mobile-btn-leaderboard"
