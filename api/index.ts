@@ -144,6 +144,40 @@ interface DBStructure {
     classGroup: string;
     academicYear: string;
   }[];
+  revisionSessions?: {
+    id: string;
+    studentUsername: string;
+    date: string;
+    duration: number;
+    topic: string;
+    rag: "red" | "amber" | "green";
+    comment: string;
+  }[];
+  examAttempts?: {
+    id: string;
+    studentUsername: string;
+    component: string;
+    topic: string;
+    questionWording: string;
+    marksAvailable: number;
+    marksScored: number;
+    selfMarkingScore: number;
+    date: string;
+  }[];
+  revisionServices?: {
+    id: string;
+    studentUsername: string;
+    name: string;
+    url: string;
+  }[];
+  revisionServiceLogs?: {
+    id: string;
+    studentUsername: string;
+    serviceId: string;
+    serviceName: string;
+    duration: number;
+    date: string;
+  }[];
 }
 
 let dbCache: DBStructure = {
@@ -248,7 +282,11 @@ let dbCache: DBStructure = {
       classGroup: "A",
       academicYear: "26-27"
     }
-  ]
+  ],
+  revisionSessions: [],
+  examAttempts: [],
+  revisionServices: [],
+  revisionServiceLogs: []
 };
 
 // Cryptography helper
@@ -338,6 +376,30 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
       const students = (studentsRes || []).map(r => mapRowKeys(r, "camel"));
       const scores = (scoresRes || []).map(r => mapRowKeys(r, "camel"));
       
+      let revisionSessions: any[] = [];
+      try {
+        const { data: resSess } = await activeSupabase.from("revision_sessions").select("*");
+        if (resSess) revisionSessions = resSess.map(r => mapRowKeys(r, "camel"));
+      } catch (_) {}
+
+      let examAttempts: any[] = [];
+      try {
+        const { data: resExam } = await activeSupabase.from("exam_attempts").select("*");
+        if (resExam) examAttempts = resExam.map(r => mapRowKeys(r, "camel"));
+      } catch (_) {}
+
+      let revisionServices: any[] = [];
+      try {
+        const { data: resServ } = await activeSupabase.from("revision_services").select("*");
+        if (resServ) revisionServices = resServ.map(r => mapRowKeys(r, "camel"));
+      } catch (_) {}
+
+      let revisionServiceLogs: any[] = [];
+      try {
+        const { data: resLogs } = await activeSupabase.from("revision_service_logs").select("*");
+        if (resLogs) revisionServiceLogs = resLogs.map(r => mapRowKeys(r, "camel"));
+      } catch (_) {}
+      
       if (tests.length === 0 && students.length === 0 && scores.length === 0) {
         console.log("[DB] Supabase tables are empty. Auto-seeding Supabase with local/pre-bundled data...");
         try {
@@ -361,7 +423,15 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
         
         await saveDB(dbCache);
       } else {
-        dbCache = { tests, students, scores };
+        dbCache = { 
+          tests, 
+          students, 
+          scores,
+          revisionSessions: revisionSessions.length > 0 ? revisionSessions : (dbCache.revisionSessions || []),
+          examAttempts: examAttempts.length > 0 ? examAttempts : (dbCache.examAttempts || []),
+          revisionServices: revisionServices.length > 0 ? revisionServices : (dbCache.revisionServices || []),
+          revisionServiceLogs: revisionServiceLogs.length > 0 ? revisionServiceLogs : (dbCache.revisionServiceLogs || [])
+        };
       }
       
       dbLoadedOnce = true;
@@ -387,6 +457,10 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
       const parsed = JSON.parse(dataStr);
       if (Array.isArray(parsed.students)) {
         dbCache = parsed;
+        if (!dbCache.revisionSessions) dbCache.revisionSessions = [];
+        if (!dbCache.examAttempts) dbCache.examAttempts = [];
+        if (!dbCache.revisionServices) dbCache.revisionServices = [];
+        if (!dbCache.revisionServiceLogs) dbCache.revisionServiceLogs = [];
         dbLoadedOnce = true;
         lastDbFetchTime = Date.now();
       }
@@ -400,6 +474,10 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
           if (Array.isArray(parsed.students)) {
             fs.writeFileSync(dbFilePath, bundleData, "utf-8");
             dbCache = parsed;
+            if (!dbCache.revisionSessions) dbCache.revisionSessions = [];
+            if (!dbCache.examAttempts) dbCache.examAttempts = [];
+            if (!dbCache.revisionServices) dbCache.revisionServices = [];
+            if (!dbCache.revisionServiceLogs) dbCache.revisionServiceLogs = [];
             dbLoadedOnce = true;
             lastDbFetchTime = Date.now();
             return dbCache;
@@ -514,6 +592,46 @@ async function saveDB(data: DBStructure): Promise<boolean> {
             dbColumnCasing.scores = fallbackCasing;
           }
         }
+      }
+
+      // D. Sync revisionSessions (Optional / Safe)
+      try {
+        if (data.revisionSessions && data.revisionSessions.length > 0) {
+          const mapped = data.revisionSessions.map(r => mapRowKeys(r, "snake"));
+          await activeSupabase.from("revision_sessions").upsert(mapped);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase revision_sessions sync skipped (table may not exist):", err.message);
+      }
+
+      // E. Sync examAttempts (Optional / Safe)
+      try {
+        if (data.examAttempts && data.examAttempts.length > 0) {
+          const mapped = data.examAttempts.map(r => mapRowKeys(r, "snake"));
+          await activeSupabase.from("exam_attempts").upsert(mapped);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase exam_attempts sync skipped (table may not exist):", err.message);
+      }
+
+      // F. Sync revisionServices (Optional / Safe)
+      try {
+        if (data.revisionServices && data.revisionServices.length > 0) {
+          const mapped = data.revisionServices.map(r => mapRowKeys(r, "snake"));
+          await activeSupabase.from("revision_services").upsert(mapped);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase revision_services sync skipped (table may not exist):", err.message);
+      }
+
+      // G. Sync revisionServiceLogs (Optional / Safe)
+      try {
+        if (data.revisionServiceLogs && data.revisionServiceLogs.length > 0) {
+          const mapped = data.revisionServiceLogs.map(r => mapRowKeys(r, "snake"));
+          await activeSupabase.from("revision_service_logs").upsert(mapped);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase revision_service_logs sync skipped (table may not exist):", err.message);
       }
 
       lastSupabaseError = null;
@@ -1175,7 +1293,207 @@ app.get("/api/teacher/dashboard", async (req, res) => {
       tests: db.tests,
       students: studentsList,
       scores: db.scores,
+      revisionSessions: db.revisionSessions || [],
+      examAttempts: db.examAttempts || [],
+      revisionServices: db.revisionServices || [],
+      revisionServiceLogs: db.revisionServiceLogs || []
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- STUDENT PERSONAL ACHIEVEMENT & REVISION TRACKER ENDPOINTS ---
+
+// 10. GET ALL REVISION DATA FOR A STUDENT
+app.get("/api/student/revision-data", async (req, res) => {
+  try {
+    const { studentUsername } = req.query;
+    if (!studentUsername) {
+      res.status(400).json({ error: "Missing student username." });
+      return;
+    }
+    const db = await loadDB(true);
+    const usernameStr = String(studentUsername).toLowerCase().trim();
+    
+    const revisionSessions = (db.revisionSessions || []).filter(s => s.studentUsername.toLowerCase().trim() === usernameStr);
+    const examAttempts = (db.examAttempts || []).filter(a => a.studentUsername.toLowerCase().trim() === usernameStr);
+    const revisionServices = (db.revisionServices || []).filter(s => s.studentUsername.toLowerCase().trim() === usernameStr);
+    const revisionServiceLogs = (db.revisionServiceLogs || []).filter(l => l.studentUsername.toLowerCase().trim() === usernameStr);
+
+    res.json({
+      success: true,
+      revisionSessions,
+      examAttempts,
+      revisionServices,
+      revisionServiceLogs
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 11. POST REVISION SESSION
+app.post("/api/student/revision-session", async (req, res) => {
+  try {
+    const { studentUsername, date, duration, topic, rag, comment } = req.body;
+    if (!studentUsername || !date || duration === undefined || !topic || !rag) {
+      res.status(400).json({ error: "Missing required revision session fields." });
+      return;
+    }
+    const db = await loadDB(true);
+    if (!db.revisionSessions) db.revisionSessions = [];
+
+    const newSession = {
+      id: "rs-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      studentUsername: String(studentUsername).trim(),
+      date: String(date).trim(),
+      duration: Number(duration),
+      topic: String(topic).trim(),
+      rag: rag as "red" | "amber" | "green",
+      comment: String(comment || "").trim()
+    };
+
+    db.revisionSessions.push(newSession);
+    await saveDB(db);
+
+    res.json({ success: true, session: newSession });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 12. DELETE REVISION SESSION
+app.delete("/api/student/revision-session/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await loadDB(true);
+    if (!db.revisionSessions) db.revisionSessions = [];
+    
+    db.revisionSessions = db.revisionSessions.filter(s => s.id !== id);
+    await saveDB(db);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 13. POST EXAM ATTEMPT
+app.post("/api/student/exam-attempt", async (req, res) => {
+  try {
+    const { studentUsername, component, topic, questionWording, marksAvailable, marksScored, selfMarkingScore, date } = req.body;
+    if (!studentUsername || !component || !topic || !questionWording || marksAvailable === undefined || marksScored === undefined) {
+      res.status(400).json({ error: "Missing required exam attempt fields." });
+      return;
+    }
+    const db = await loadDB(true);
+    if (!db.examAttempts) db.examAttempts = [];
+
+    const newAttempt = {
+      id: "ea-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      studentUsername: String(studentUsername).trim(),
+      component: String(component).trim(),
+      topic: String(topic).trim(),
+      questionWording: String(questionWording).trim(),
+      marksAvailable: Number(marksAvailable),
+      marksScored: Number(marksScored),
+      selfMarkingScore: Number(selfMarkingScore || 0),
+      date: String(date || new Date().toISOString().split("T")[0]).trim()
+    };
+
+    db.examAttempts.push(newAttempt);
+    await saveDB(db);
+
+    res.json({ success: true, attempt: newAttempt });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 14. DELETE EXAM ATTEMPT
+app.delete("/api/student/exam-attempt/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await loadDB(true);
+    if (!db.examAttempts) db.examAttempts = [];
+
+    db.examAttempts = db.examAttempts.filter(a => a.id !== id);
+    await saveDB(db);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 15. POST REVISION SERVICE
+app.post("/api/student/revision-service", async (req, res) => {
+  try {
+    const { studentUsername, name, url } = req.body;
+    if (!studentUsername || !name) {
+      res.status(400).json({ error: "Missing required revision service fields." });
+      return;
+    }
+    const db = await loadDB(true);
+    if (!db.revisionServices) db.revisionServices = [];
+
+    const newService = {
+      id: "srv-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      studentUsername: String(studentUsername).trim(),
+      name: String(name).trim(),
+      url: String(url || "").trim()
+    };
+
+    db.revisionServices.push(newService);
+    await saveDB(db);
+
+    res.json({ success: true, service: newService });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 16. DELETE REVISION SERVICE
+app.delete("/api/student/revision-service/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await loadDB(true);
+    if (!db.revisionServices) db.revisionServices = [];
+    if (!db.revisionServiceLogs) db.revisionServiceLogs = [];
+
+    db.revisionServices = db.revisionServices.filter(s => s.id !== id);
+    db.revisionServiceLogs = db.revisionServiceLogs.filter(l => l.serviceId !== id);
+
+    await saveDB(db);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 17. LOG SERVICE DURATION
+app.post("/api/student/revision-services/log", async (req, res) => {
+  try {
+    const { studentUsername, serviceId, serviceName, duration, date } = req.body;
+    if (!studentUsername || !serviceId || !serviceName || duration === undefined || !date) {
+      res.status(400).json({ error: "Missing required service log fields." });
+      return;
+    }
+    const db = await loadDB(true);
+    if (!db.revisionServiceLogs) db.revisionServiceLogs = [];
+
+    const newLog = {
+      id: "rsl-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      studentUsername: String(studentUsername).trim(),
+      serviceId: String(serviceId).trim(),
+      serviceName: String(serviceName).trim(),
+      duration: Number(duration),
+      date: String(date).trim()
+    };
+
+    db.revisionServiceLogs.push(newLog);
+    await saveDB(db);
+
+    res.json({ success: true, log: newLog });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
