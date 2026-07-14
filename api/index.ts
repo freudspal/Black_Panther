@@ -379,7 +379,12 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
       let revisionSessions: any[] = [];
       try {
         const { data: resSess } = await activeSupabase.from("revision_sessions").select("*");
-        if (resSess) revisionSessions = resSess.map(r => mapRowKeys(r, "camel"));
+        if (resSess) {
+          revisionSessions = resSess.map(r => {
+            const camel = mapRowKeys(r, "camel");
+            return { ...camel, rag: camel.rag || "green" };
+          });
+        }
       } catch (_) {}
 
       let examAttempts: any[] = [];
@@ -1316,7 +1321,9 @@ app.get("/api/student/revision-data", async (req, res) => {
     const db = await loadDB(true);
     const usernameStr = String(studentUsername).toLowerCase().trim();
     
-    const revisionSessions = (db.revisionSessions || []).filter(s => s.studentUsername.toLowerCase().trim() === usernameStr);
+    const revisionSessions = (db.revisionSessions || [])
+      .filter(s => s.studentUsername.toLowerCase().trim() === usernameStr)
+      .map(s => ({ ...s, rag: s.rag || "green" }));
     const examAttempts = (db.examAttempts || []).filter(a => a.studentUsername.toLowerCase().trim() === usernameStr);
     const revisionServices = (db.revisionServices || []).filter(s => s.studentUsername.toLowerCase().trim() === usernameStr);
     const revisionServiceLogs = (db.revisionServiceLogs || []).filter(l => l.studentUsername.toLowerCase().trim() === usernameStr);
