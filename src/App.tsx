@@ -21,6 +21,8 @@ import {
   RefreshCw,
   Clock,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Sparkles,
   Info,
   Hash,
@@ -125,6 +127,8 @@ export default function App() {
   const [timerSeconds, setTimerSeconds] = useState<number>(0);
   const [isTimerRunning, setIsTimerRunning] = useState<boolean>(false);
   const [cumulativeSearch, setCumulativeSearch] = useState<string>("");
+  const [ragFilter, setRagFilter] = useState<"all" | "green" | "amber" | "red">("all");
+  const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [quickLogTopic, setQuickLogTopic] = useState<string>("");
   const [quickLogRag, setQuickLogRag] = useState<"red" | "amber" | "green">("green");
   const [showQuickLogForm, setShowQuickLogForm] = useState<boolean>(false);
@@ -2802,38 +2806,89 @@ export default function App() {
 
                     {/* Unified Cumulative Revision & Exam History Log */}
                     {(() => {
+                      const getFirstPhrases = (text: string, count = 2) => {
+                        if (!text) return "";
+                        // Split by sentence-ending punctuation followed by space or end of string
+                        const sentences = text.trim().split(/(?<=[.!?])\s+/);
+                        if (sentences.length <= count) return text;
+                        return sentences.slice(0, count).join(" ") + "...";
+                      };
+
                       const cumulativeLogs = [
-                        ...revisionSessions.map(s => ({
-                          id: `session-${s.id}`,
-                          originalId: s.id,
-                          type: "topic" as const,
-                          date: s.date,
-                          title: s.topic,
-                          details: s.comment,
-                          badge: s.rag ? s.rag.toUpperCase() : "GREEN",
-                          badgeColor: s.rag === "green" 
-                            ? "bg-green-500/10 text-green-400 border border-green-500/20" 
-                            : s.rag === "amber" 
-                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
-                            : "bg-red-500/10 text-red-400 border border-red-500/20",
-                          meta: `${s.duration} mins`,
-                          rag: s.rag,
-                        })),
-                        ...examAttempts.map(e => ({
-                          id: `exam-${e.id}`,
-                          originalId: e.id,
-                          type: "exam" as const,
-                          date: e.date,
-                          title: `${e.component} - ${e.topic}`,
-                          details: e.questionWording ? `Question: ${e.questionWording}` : "Exam question attempt",
-                          badge: `Exam Score: ${e.marksScored}/${e.marksAvailable}`,
-                          badgeColor: "bg-purple-950 border border-purple-800 text-purple-300",
-                          meta: `Self-Assessed Marks`,
-                          rag: undefined,
-                        }))
+                        ...revisionSessions.map(s => {
+                          const rating = s.rag || "green";
+                          const duration = s.duration !== undefined ? s.duration : (s as any).duration;
+                          const topic = s.topic || "";
+                          const comment = s.comment || (s as any).comment || "";
+                          const dateVal = s.date || "";
+
+                          return {
+                            id: `session-${s.id}`,
+                            originalId: s.id,
+                            type: "topic" as const,
+                            date: dateVal,
+                            title: topic,
+                            details: comment,
+                            badge: rating.toUpperCase(),
+                            badgeColor: rating === "green" 
+                              ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                              : rating === "amber" 
+                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                              : "bg-red-500/10 text-red-400 border border-red-500/20",
+                            meta: `${duration} mins`,
+                            rag: rating,
+                            // Extra fields for expanded display
+                            fullTopic: topic,
+                            fullComment: comment,
+                            fullDuration: duration,
+                          };
+                        }),
+                        ...examAttempts.map(e => {
+                          const marksScored = e.marksScored !== undefined ? e.marksScored : (e as any).marks_scored;
+                          const marksAvailable = e.marksAvailable !== undefined ? e.marksAvailable : (e as any).marks_available;
+                          const questionWording = e.questionWording || (e as any).question_wording || "";
+                          const component = e.component || "";
+                          const topic = e.topic || "";
+                          const dateVal = e.date || "";
+                          const selfScore = e.selfMarkingScore !== undefined ? e.selfMarkingScore : (e as any).self_marking_score;
+
+                          const percentage = marksAvailable > 0 ? (marksScored / marksAvailable) * 100 : 0;
+                          const rating = percentage >= 70 ? "green" : percentage >= 40 ? "amber" : "red";
+                          
+                          return {
+                            id: `exam-${e.id}`,
+                            originalId: e.id,
+                            type: "exam" as const,
+                            date: dateVal,
+                            title: `${component} - ${topic}`,
+                            details: questionWording ? `Question: ${questionWording}` : "Exam question attempt",
+                            badge: `Exam Score: ${marksScored}/${marksAvailable} (${percentage.toFixed(0)}%)`,
+                            badgeColor: rating === "green" 
+                              ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                              : rating === "amber" 
+                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                              : "bg-red-500/10 text-red-400 border border-red-500/20",
+                            meta: `Self-Mark: ${selfScore}/10`,
+                            rag: rating,
+                            // Extra fields for full detail display
+                            fullComponent: component,
+                            fullTopic: topic,
+                            fullWording: questionWording,
+                            fullMarksScored: marksScored,
+                            fullMarksAvailable: marksAvailable,
+                            fullPercentage: percentage,
+                            fullSelfScore: selfScore,
+                          };
+                        })
                       ].sort((a, b) => b.date.localeCompare(a.date));
 
                       const filteredCumulativeLogs = cumulativeLogs.filter(log => {
+                        // 1. RAG Filter
+                        if (ragFilter !== "all" && log.rag !== ragFilter) {
+                          return false;
+                        }
+
+                        // 2. Keyword Filter
                         const query = cumulativeSearch.trim().toLowerCase();
                         if (!query) return true;
                         return (
@@ -2848,83 +2903,251 @@ export default function App() {
 
                       return (
                         <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl space-y-4">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-purple-950/40 pb-4">
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-purple-950/40 pb-4">
                             <div>
                               <h4 className="text-sm font-semibold text-white">Revision Log</h4>
                             </div>
                             
-                            {/* Keyword Filter Input */}
-                            <div className="relative max-w-xs w-full">
-                              <Search className="absolute left-3 top-2.5 h-4 w-4 text-neutral-400" />
-                              <input
-                                type="text"
-                                placeholder="Search by keywords..."
-                                value={cumulativeSearch}
-                                onChange={(e) => setCumulativeSearch(e.target.value)}
-                                className="w-full bg-[#030304] border border-purple-950/80 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-neutral-500 focus:border-purple-600 focus:outline-none"
-                              />
+                            {/* RAG and Keyword Filters */}
+                            <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+                              {/* RAG Filter Segmented Controls */}
+                              <div className="flex bg-[#030304] border border-purple-950/80 rounded-xl p-1 text-[10px] font-mono">
+                                <button
+                                  type="button"
+                                  onClick={() => setRagFilter("all")}
+                                  className={`px-2.5 py-1 rounded-lg font-bold transition uppercase ${
+                                    ragFilter === "all"
+                                      ? "bg-purple-950 text-purple-300"
+                                      : "text-neutral-400 hover:text-white"
+                                  }`}
+                                >
+                                  ALL
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRagFilter("green")}
+                                  className={`px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1 ${
+                                    ragFilter === "green"
+                                      ? "bg-green-500/15 text-green-400 border border-green-500/20 font-black"
+                                      : "text-neutral-400 hover:text-green-450"
+                                  }`}
+                                >
+                                  <span>🟢</span> <span>GREEN</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRagFilter("amber")}
+                                  className={`px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1 ${
+                                    ragFilter === "amber"
+                                      ? "bg-amber-500/15 text-amber-400 border border-amber-500/20 font-black"
+                                      : "text-neutral-400 hover:text-amber-450"
+                                  }`}
+                                >
+                                  <span>🟡</span> <span>AMBER</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRagFilter("red")}
+                                  className={`px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1 ${
+                                    ragFilter === "red"
+                                      ? "bg-red-500/15 text-red-400 border border-red-500/20 font-black"
+                                      : "text-neutral-400 hover:text-red-450"
+                                  }`}
+                                >
+                                  <span>🔴</span> <span>RED</span>
+                                </button>
+                              </div>
+
+                              {/* Keyword Filter Input */}
+                              <div className="relative max-w-xs w-full">
+                                <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-neutral-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Search logs..."
+                                  value={cumulativeSearch}
+                                  onChange={(e) => setCumulativeSearch(e.target.value)}
+                                  className="w-full bg-[#030304] border border-purple-950/80 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-neutral-500 focus:border-purple-600 focus:outline-none"
+                                />
+                              </div>
                             </div>
                           </div>
 
                           {filteredCumulativeLogs.length > 0 ? (
-                            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-                              {filteredCumulativeLogs.map((log) => (
-                                <div
-                                  key={log.id}
-                                  className="bg-neutral-950 border border-purple-950/40 p-4 rounded-2xl flex flex-col sm:flex-row justify-between sm:items-start gap-4 transition hover:bg-purple-950/10"
-                                >
-                                  <div className="space-y-2 flex-1">
-                                    <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
-                                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase ${
-                                        log.type === "topic" 
-                                          ? "bg-purple-950 text-purple-400 border border-purple-900" 
-                                          : "bg-blue-950 text-blue-400 border border-blue-900"
-                                      }`}>
-                                        {log.type === "topic" ? "📖 Topic" : "📝 Exam Question"}
-                                      </span>
-                                      <span className="text-neutral-700">•</span>
-                                      <span className="text-xs font-semibold text-white">{log.title}</span>
+                            <div className="space-y-3 max-h-[520px] overflow-y-auto pr-2">
+                              {filteredCumulativeLogs.map((log) => {
+                                const isSelected = selectedLogId === log.id;
+                                return (
+                                  <div
+                                    key={log.id}
+                                    className={`bg-neutral-950 border rounded-2xl p-4 transition-all duration-200 cursor-pointer flex flex-col justify-between ${
+                                      isSelected
+                                        ? "border-purple-600/80 bg-purple-950/5 shadow-purple-950/20 shadow-md"
+                                        : "border-purple-950/40 hover:bg-purple-950/10 hover:border-purple-900/60"
+                                    }`}
+                                    onClick={() => setSelectedLogId(isSelected ? null : log.id)}
+                                  >
+                                    <div className="flex flex-col sm:flex-row justify-between sm:items-start gap-3 w-full">
+                                      <div className="space-y-2 flex-1">
+                                        <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
+                                          {log.type === "exam" ? (
+                                            <>
+                                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase bg-blue-950 text-blue-400 border border-blue-900">
+                                                📝 Exam Question
+                                              </span>
+                                              <span className="text-neutral-700">•</span>
+                                            </>
+                                          ) : null}
+                                          <span className="text-xs font-semibold text-white">{log.title}</span>
+                                        </div>
+                                        
+                                        {log.details && (
+                                          <p className="text-xs text-neutral-300 italic leading-relaxed">
+                                            "{isSelected ? log.details : getFirstPhrases(log.details)}"
+                                          </p>
+                                        )}
+
+                                        <div className="flex items-center space-x-3 text-[10px] text-neutral-500 font-mono pt-1">
+                                          <span>Date: {log.date}</span>
+                                          {log.type === "topic" ? (
+                                            <>
+                                              <span>•</span>
+                                              <span>Duration: {log.meta}</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span>•</span>
+                                              <span>{log.meta}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center space-x-3 self-end sm:self-auto pt-2 sm:pt-0" onClick={(e) => e.stopPropagation()}>
+                                        <span className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-md ${log.badgeColor}`}>
+                                          {log.badge}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (log.type === "topic") {
+                                              handleRevisionSessionDelete(log.originalId);
+                                            } else {
+                                              handleExamAttemptDelete(log.originalId);
+                                            }
+                                          }}
+                                          className="text-neutral-500 hover:text-red-400 transition p-1.5 rounded-md"
+                                          title={`Delete ${log.type === "topic" ? "revision session" : "exam attempt"}`}
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedLogId(isSelected ? null : log.id);
+                                          }}
+                                          className="text-neutral-400 hover:text-white transition p-1"
+                                          title={isSelected ? "Collapse" : "Expand details"}
+                                        >
+                                          {isSelected ? (
+                                            <ChevronUp className="w-4 h-4" />
+                                          ) : (
+                                            <ChevronDown className="w-4 h-4" />
+                                          )}
+                                        </button>
+                                      </div>
                                     </div>
-                                    
-                                    {log.details && (
-                                      <p className="text-xs text-neutral-300 italic">"{log.details}"</p>
+
+                                    {/* Expanded Panel */}
+                                    {isSelected && (
+                                      <div className="mt-4 pt-4 border-t border-purple-950/40 space-y-4 animate-fade-in text-xs text-neutral-300">
+                                        {log.type === "topic" ? (
+                                          <>
+                                            <div className="bg-[#030304] border border-purple-900/30 p-3 rounded-xl space-y-2">
+                                              <div className="font-semibold text-white text-xs flex items-center gap-1.5">
+                                                <span>📖 Full Session Commentary</span>
+                                              </div>
+                                              <p className="whitespace-pre-wrap leading-relaxed text-neutral-200 font-sans">
+                                                {log.fullComment || "No comments written for this study session."}
+                                              </p>
+                                            </div>
+                                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 font-mono text-[10px] text-neutral-400 bg-[#030304]/40 p-3 rounded-xl border border-purple-950/20">
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Category</span>
+                                                <span className="text-purple-300">📖 Study Topic</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Duration</span>
+                                                <span className="text-white font-bold">{log.fullDuration} minutes</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Logged Date</span>
+                                                <span className="text-white">{log.date}</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">RAG Rating</span>
+                                                <span className={`font-black uppercase flex items-center gap-1 ${
+                                                  log.rag === "green" ? "text-green-400" : log.rag === "amber" ? "text-amber-400" : "text-red-400"
+                                                }`}>
+                                                  <span>{log.rag === "green" ? "🟢" : log.rag === "amber" ? "🟡" : "🔴"}</span>
+                                                  <span>{log.rag}</span>
+                                                </span>
+                                              </div>
+                                            </div>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <div className="bg-[#030304] border border-purple-900/30 p-3 rounded-xl space-y-2">
+                                              <div className="font-semibold text-white text-xs flex items-center gap-1.5">
+                                                <span>📝 Exam Question Wording</span>
+                                              </div>
+                                              <p className="whitespace-pre-wrap leading-relaxed text-neutral-200 font-sans italic">
+                                                "{log.fullWording || "No question wording logged."}"
+                                              </p>
+                                            </div>
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 font-mono text-[10px] text-neutral-400 bg-[#030304]/40 p-3 rounded-xl border border-purple-950/20">
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Exam Component</span>
+                                                <span className="text-white">{log.fullComponent}</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Topic Area</span>
+                                                <span className="text-white">{log.fullTopic}</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Date Logged</span>
+                                                <span className="text-white">{log.date}</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Marks Scored</span>
+                                                <span className="text-purple-350 font-bold">{log.fullMarksScored} / {log.fullMarksAvailable} ({log.fullPercentage?.toFixed(1)}%)</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Self-Marking Grade</span>
+                                                <span className="text-amber-400 font-bold">{log.fullSelfScore} / 10</span>
+                                              </div>
+                                              <div>
+                                                <span className="block text-neutral-500 uppercase tracking-wider font-bold">Performance RAG</span>
+                                                <span className={`font-black uppercase flex items-center gap-1 ${
+                                                  log.rag === "green" ? "text-green-400" : log.rag === "amber" ? "text-amber-400" : "text-red-400"
+                                                }`}>
+                                                  <span>{log.rag === "green" ? "🟢" : log.rag === "amber" ? "🟡" : "🔴"}</span>
+                                                  <span>{log.rag?.toUpperCase()}</span>
+                                                </span>
+                                              </div>
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
                                     )}
-
-                                    <div className="flex items-center space-x-3 text-[10px] text-neutral-500 font-mono">
-                                      <span>Date: {log.date}</span>
-                                      {log.type === "topic" && (
-                                        <>
-                                          <span>•</span>
-                                          <span>Duration: {log.meta}</span>
-                                        </>
-                                      )}
-                                    </div>
                                   </div>
-
-                                  <div className="flex items-center space-x-3 self-end sm:self-auto">
-                                    <span className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-md ${log.badgeColor}`}>
-                                      {log.badge}
-                                    </span>
-                                    <button
-                                      onClick={() => {
-                                        if (log.type === "topic") {
-                                          handleRevisionSessionDelete(log.originalId);
-                                        } else {
-                                          handleExamAttemptDelete(log.originalId);
-                                        }
-                                      }}
-                                      className="text-neutral-500 hover:text-red-400 transition p-1.5 rounded-md"
-                                      title={`Delete ${log.type === "topic" ? "revision session" : "exam attempt"}`}
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           ) : (
                             <div className="text-center py-12 text-xs text-neutral-600 italic">
-                              {cumulativeSearch ? "No entries match your search." : "Your cumulative revision history is empty. Log a topic session or exam question above!"}
+                              {cumulativeSearch || ragFilter !== "all" ? "No entries match your filters." : "Your cumulative revision history is empty. Log a topic session or exam question above!"}
                             </div>
                           )}
                         </div>
