@@ -159,6 +159,7 @@ export default function App() {
   const [examMarksScored, setExamMarksScored] = useState<string>("");
   const [examSelfMark, setExamSelfMark] = useState<string>(""); // self scoring score
   const [examDate, setExamDate] = useState<string>(new Date().toISOString().split("T")[0]);
+  const [examRag, setExamRag] = useState<"red" | "amber" | "green">("green");
 
   // External Services config forms
   const [newServiceName, setNewServiceName] = useState<string>("");
@@ -808,6 +809,9 @@ export default function App() {
     const savedRag = revRag;
     const savedDate = revDate;
 
+    // Check database state first to make sure UI is up-to-date
+    await syncApplicationData();
+
     // Instantly reset input fields
     setRevDuration("");
     setRevTopic("");
@@ -829,7 +833,7 @@ export default function App() {
       const data = await response.json();
       if (response.ok && data.success) {
         showNotification("Revision session logged successfully!", "success");
-        syncApplicationData();
+        await syncApplicationData();
       } else {
         showNotification(data.error || "Failed to log revision session.", "error");
         // Restore values if failed
@@ -857,6 +861,10 @@ export default function App() {
       return;
     }
     const mins = Math.max(1, Math.round(timerSeconds / 60));
+
+    // Check database state first
+    await syncApplicationData();
+
     try {
       const response = await fetch("/api/student/revision-session", {
         method: "POST",
@@ -876,7 +884,7 @@ export default function App() {
         setTimerSeconds(0);
         setQuickLogTopic("");
         setShowQuickLogForm(false);
-        syncApplicationData();
+        await syncApplicationData();
       } else {
         showNotification(data.error || "Failed to save session.", "error");
       }
@@ -938,6 +946,10 @@ export default function App() {
     const savedMarksAvailable = examMarksAvailable;
     const savedMarksScored = examMarksScored;
     const savedSelfMark = examSelfMark;
+    const savedRag = examRag;
+
+    // Check database state first to make sure UI is up-to-date
+    await syncApplicationData();
 
     // Reset input fields instantly to prevent double logging
     setExamComponent("");
@@ -946,6 +958,7 @@ export default function App() {
     setExamMarksAvailable("");
     setExamMarksScored("");
     setExamSelfMark("");
+    setExamRag("green");
 
     try {
       const response = await fetch("/api/student/exam-attempt", {
@@ -959,13 +972,14 @@ export default function App() {
           marksAvailable: marksAvail,
           marksScored: marksSc,
           selfMarkingScore: selfM,
-          date: examDate
+          date: examDate,
+          rag: savedRag
         })
       });
       const data = await response.json();
       if (response.ok && data.success) {
         showNotification("Exam question attempt logged successfully!", "success");
-        syncApplicationData();
+        await syncApplicationData();
       } else {
         showNotification(data.error || "Failed to log exam attempt.", "error");
         // Restore values on failure
@@ -975,6 +989,7 @@ export default function App() {
         setExamMarksAvailable(savedMarksAvailable);
         setExamMarksScored(savedMarksScored);
         setExamSelfMark(savedSelfMark);
+        setExamRag(savedRag);
       }
     } catch (_) {
       showNotification("Network error. Could not log exam attempt.", "error");
@@ -985,6 +1000,7 @@ export default function App() {
       setExamMarksAvailable(savedMarksAvailable);
       setExamMarksScored(savedMarksScored);
       setExamSelfMark(savedSelfMark);
+      setExamRag(savedRag);
     } finally {
       setIsSavingExamAttempt(false);
     }
@@ -2752,6 +2768,28 @@ export default function App() {
                                 className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
                               />
                             </div>
+                            <div className="md:col-span-6 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Attempt Date</label>
+                              <input
+                                type="date"
+                                required
+                                value={examDate}
+                                onChange={(e) => setExamDate(e.target.value)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              />
+                            </div>
+                            <div className="md:col-span-6 space-y-1.5">
+                              <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">RAG Rating Tag</label>
+                              <select
+                                value={examRag}
+                                onChange={(e) => setExamRag(e.target.value as any)}
+                                className="w-full bg-[#030304] border rounded-xl px-4 py-2.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                              >
+                                <option value="green">🟢 Green (Comfortable / Strong)</option>
+                                <option value="amber">🟡 Amber (Need improvement)</option>
+                                <option value="red">🔴 Red (Unconfident / Weak)</option>
+                              </select>
+                            </div>
                             <div className="md:col-span-12 space-y-1.5">
                               <label className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400">Topic Area</label>
                               <input
@@ -2814,73 +2852,143 @@ export default function App() {
                         return sentences.slice(0, count).join(" ") + "...";
                       };
 
-                      const cumulativeLogs = [
-                        ...revisionSessions.map(s => {
-                          const rating = s.rag || "green";
-                          const duration = s.duration !== undefined ? s.duration : (s as any).duration;
-                          const topic = s.topic || "";
-                          const comment = s.comment || (s as any).comment || "";
-                          const dateVal = s.date || "";
+                      const rawLogs: Array<{
+                        id: string;
+                        originalId: string;
+                        type: "exam" | "topic";
+                        date: string;
+                        title: string;
+                        details: string;
+                        badge: string;
+                        badgeColor: string;
+                        meta: string;
+                        rag: string;
+                        fullComponent?: string;
+                        fullTopic: string;
+                        fullWording?: string;
+                        fullMarksScored?: number;
+                        fullMarksAvailable?: number;
+                        fullPercentage?: number;
+                        fullSelfScore?: number;
+                        fullComment?: string;
+                        fullDuration?: number;
+                      }> = [];
 
-                          return {
-                            id: `session-${s.id}`,
-                            originalId: s.id,
-                            type: "topic" as const,
-                            date: dateVal,
-                            title: topic,
-                            details: comment,
-                            badge: rating.toUpperCase(),
-                            badgeColor: rating === "green" 
-                              ? "bg-green-500/10 text-green-400 border border-green-500/20" 
-                              : rating === "amber" 
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
-                              : "bg-red-500/10 text-red-400 border border-red-500/20",
-                            meta: `${duration} mins`,
-                            rag: rating,
-                            // Extra fields for expanded display
-                            fullTopic: topic,
-                            fullComment: comment,
-                            fullDuration: duration,
-                          };
-                        }),
-                        ...examAttempts.map(e => {
-                          const marksScored = e.marksScored !== undefined ? e.marksScored : (e as any).marks_scored;
-                          const marksAvailable = e.marksAvailable !== undefined ? e.marksAvailable : (e as any).marks_available;
-                          const questionWording = e.questionWording || (e as any).question_wording || "";
-                          const component = e.component || "";
-                          const topic = e.topic || "";
-                          const dateVal = e.date || "";
-                          const selfScore = e.selfMarkingScore !== undefined ? e.selfMarkingScore : (e as any).self_marking_score;
+                      // Process revision sessions
+                      for (const s of revisionSessions) {
+                        const rating = s.rag || "green";
+                        const duration = s.duration !== undefined ? s.duration : (s as any).duration;
+                        const topic = s.topic || "";
+                        const comment = s.comment || (s as any).comment || "";
+                        const dateVal = s.date || "";
 
-                          const percentage = marksAvailable > 0 ? (marksScored / marksAvailable) * 100 : 0;
-                          const rating = percentage >= 70 ? "green" : percentage >= 40 ? "amber" : "red";
-                          
-                          return {
-                            id: `exam-${e.id}`,
-                            originalId: e.id,
-                            type: "exam" as const,
-                            date: dateVal,
-                            title: `${component} - ${topic}`,
-                            details: questionWording ? `Question: ${questionWording}` : "Exam question attempt",
-                            badge: `Exam Score: ${marksScored}/${marksAvailable} (${percentage.toFixed(0)}%)`,
-                            badgeColor: rating === "green" 
-                              ? "bg-green-500/10 text-green-400 border border-green-500/20" 
-                              : rating === "amber" 
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
-                              : "bg-red-500/10 text-red-400 border border-red-500/20",
-                            meta: `Self-Mark: ${selfScore}/10`,
-                            rag: rating,
-                            // Extra fields for full detail display
-                            fullComponent: component,
-                            fullTopic: topic,
-                            fullWording: questionWording,
-                            fullMarksScored: marksScored,
-                            fullMarksAvailable: marksAvailable,
-                            fullPercentage: percentage,
-                            fullSelfScore: selfScore,
-                          };
-                        })
-                      ].sort((a, b) => b.date.localeCompare(a.date));
+                        // Check if this is an exam question logged inside revision sessions
+                        if (comment.includes("__EXAM_METADATA__:")) {
+                          try {
+                            const parts = comment.split("__EXAM_METADATA__:");
+                            const meta = JSON.parse(parts[1]);
+                            const normPercent = meta.marksAvailable > 0 ? (meta.marksScored / meta.marksAvailable) * 100 : 0;
+                            
+                            rawLogs.push({
+                              id: `session-${s.id}`,
+                              originalId: s.id,
+                              type: "exam" as const,
+                              date: dateVal,
+                              title: `${meta.component} - ${meta.topicArea}`,
+                              details: topic, // Question wording is stored in the topic field
+                              badge: `Exam Score: ${meta.marksScored}/${meta.marksAvailable} (${normPercent.toFixed(0)}%)`,
+                              badgeColor: rating === "green" 
+                                ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                                : rating === "amber" 
+                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                                : "bg-red-500/10 text-red-400 border border-red-500/20",
+                              meta: `Self-Mark: ${meta.selfMarkingScore || 0}/10`,
+                              rag: rating,
+                              fullComponent: meta.component,
+                              fullTopic: meta.topicArea,
+                              fullWording: topic,
+                              fullMarksScored: meta.marksScored,
+                              fullMarksAvailable: meta.marksAvailable,
+                              fullPercentage: normPercent,
+                              fullSelfScore: meta.selfMarkingScore || 0
+                            });
+                            continue;
+                          } catch (_) {
+                            // Fallback
+                          }
+                        }
+
+                        // Regular study topic log
+                        rawLogs.push({
+                          id: `session-${s.id}`,
+                          originalId: s.id,
+                          type: "topic" as const,
+                          date: dateVal,
+                          title: topic,
+                          details: comment,
+                          badge: rating.toUpperCase(),
+                          badgeColor: rating === "green" 
+                            ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                            : rating === "amber" 
+                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                            : "bg-red-500/10 text-red-400 border border-red-500/20",
+                          meta: `${duration} mins`,
+                          rag: rating,
+                          fullTopic: topic,
+                          fullComment: comment,
+                          fullDuration: duration
+                        });
+                      }
+
+                      // Process standalone exam attempts (if any, for backwards compatibility)
+                      for (const e of examAttempts) {
+                        const marksScored = e.marksScored !== undefined ? e.marksScored : (e as any).marks_scored;
+                        const marksAvailable = e.marksAvailable !== undefined ? e.marksAvailable : (e as any).marks_available;
+                        const questionWording = e.questionWording || (e as any).question_wording || "";
+                        const component = e.component || "";
+                        const topic = e.topic || "";
+                        const dateVal = e.date || "";
+                        const selfScore = e.selfMarkingScore !== undefined ? e.selfMarkingScore : (e as any).self_marking_score;
+                        const rating = e.rag || (marksAvailable > 0 && (marksScored / marksAvailable) >= 0.7 ? "green" : (marksScored / marksAvailable) >= 0.4 ? "amber" : "red");
+
+                        const percentage = marksAvailable > 0 ? (marksScored / marksAvailable) * 100 : 0;
+
+                        rawLogs.push({
+                          id: `exam-${e.id}`,
+                          originalId: e.id,
+                          type: "exam" as const,
+                          date: dateVal,
+                          title: `${component} - ${topic}`,
+                          details: questionWording ? `Question: ${questionWording}` : "Exam question attempt",
+                          badge: `Exam Score: ${marksScored}/${marksAvailable} (${percentage.toFixed(0)}%)`,
+                          badgeColor: rating === "green" 
+                            ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                            : rating === "amber" 
+                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                            : "bg-red-500/10 text-red-400 border border-red-500/20",
+                          meta: `Self-Mark: ${selfScore}/10`,
+                          rag: rating,
+                          fullComponent: component,
+                          fullTopic: topic,
+                          fullWording: questionWording,
+                          fullMarksScored: marksScored,
+                          fullMarksAvailable: marksAvailable,
+                          fullPercentage: percentage,
+                          fullSelfScore: selfScore
+                        });
+                      }
+
+                      // Deduplicate logs by originalId so we never show duplicates
+                      const uniqueLogsMap = new Map<string, typeof rawLogs[0]>();
+                      for (const log of rawLogs) {
+                        // If already added, prefer the richer session-based log format
+                        if (!uniqueLogsMap.has(log.originalId)) {
+                          uniqueLogsMap.set(log.originalId, log);
+                        } else if (log.id.startsWith("session-")) {
+                          uniqueLogsMap.set(log.originalId, log);
+                        }
+                      }
+                      const cumulativeLogs = Array.from(uniqueLogsMap.values()).sort((a, b) => b.date.localeCompare(a.date));
 
                       const filteredCumulativeLogs = cumulativeLogs.filter(log => {
                         // 1. RAG Filter
