@@ -601,9 +601,20 @@ async function saveDB(data: DBStructure): Promise<boolean> {
 
       // D. Sync revisionSessions (Optional / Safe)
       try {
-        if (data.revisionSessions && data.revisionSessions.length > 0) {
-          const mapped = data.revisionSessions.map(r => mapRowKeys(r, "snake"));
-          await activeSupabase.from("revision_sessions").upsert(mapped);
+        if (data.revisionSessions) {
+          const { data: existingSess, error: existingSessErr } = await activeSupabase.from("revision_sessions").select("id");
+          if (!existingSessErr && existingSess) {
+            const existingIds = existingSess.map((s: any) => String(s.id));
+            const currentIds = data.revisionSessions.map(s => String(s.id));
+            const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
+            if (idsToDelete.length > 0) {
+              await activeSupabase.from("revision_sessions").delete().in("id", idsToDelete);
+            }
+          }
+          if (data.revisionSessions.length > 0) {
+            const mapped = data.revisionSessions.map(r => mapRowKeys(r, "snake"));
+            await activeSupabase.from("revision_sessions").upsert(mapped);
+          }
         }
       } catch (err: any) {
         console.warn("[DB] Supabase revision_sessions sync skipped (table may not exist):", err.message);
@@ -611,9 +622,20 @@ async function saveDB(data: DBStructure): Promise<boolean> {
 
       // E. Sync examAttempts (Optional / Safe)
       try {
-        if (data.examAttempts && data.examAttempts.length > 0) {
-          const mapped = data.examAttempts.map(r => mapRowKeys(r, "snake"));
-          await activeSupabase.from("exam_attempts").upsert(mapped);
+        if (data.examAttempts) {
+          const { data: existingExam, error: existingExamErr } = await activeSupabase.from("exam_attempts").select("id");
+          if (!existingExamErr && existingExam) {
+            const existingIds = existingExam.map((s: any) => String(s.id));
+            const currentIds = data.examAttempts.map(s => String(s.id));
+            const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
+            if (idsToDelete.length > 0) {
+              await activeSupabase.from("exam_attempts").delete().in("id", idsToDelete);
+            }
+          }
+          if (data.examAttempts.length > 0) {
+            const mapped = data.examAttempts.map(r => mapRowKeys(r, "snake"));
+            await activeSupabase.from("exam_attempts").upsert(mapped);
+          }
         }
       } catch (err: any) {
         console.warn("[DB] Supabase exam_attempts sync skipped (table may not exist):", err.message);
@@ -1351,8 +1373,11 @@ app.post("/api/student/revision-session", async (req, res) => {
     const db = await loadDB(true);
     if (!db.revisionSessions) db.revisionSessions = [];
 
+    // Generate unique number ID (string containing only digits)
+    const uniqueIdNum = String(Date.now() + Math.floor(Math.random() * 1000000));
+
     const newSession = {
-      id: "rs-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      id: uniqueIdNum,
       studentUsername: String(studentUsername).trim(),
       date: String(date).trim(),
       duration: Number(duration),
@@ -1376,8 +1401,12 @@ app.delete("/api/student/revision-session/:id", async (req, res) => {
     const { id } = req.params;
     const db = await loadDB(true);
     if (!db.revisionSessions) db.revisionSessions = [];
+    if (!db.examAttempts) db.examAttempts = [];
     
+    // Filter out from both revisionSessions and examAttempts to keep them perfectly in sync
     db.revisionSessions = db.revisionSessions.filter(s => s.id !== id);
+    db.examAttempts = db.examAttempts.filter(a => a.id !== id);
+    
     await saveDB(db);
     res.json({ success: true });
   } catch (err: any) {
@@ -1388,30 +1417,69 @@ app.delete("/api/student/revision-session/:id", async (req, res) => {
 // 13. POST EXAM ATTEMPT
 app.post("/api/student/exam-attempt", async (req, res) => {
   try {
-    const { studentUsername, component, topic, questionWording, marksAvailable, marksScored, selfMarkingScore, date } = req.body;
+    const { studentUsername, component, topic, questionWording, marksAvailable, marksScored, selfMarkingScore, date, rag } = req.body;
     if (!studentUsername || !component || !topic || !questionWording || marksAvailable === undefined || marksScored === undefined) {
       res.status(400).json({ error: "Missing required exam attempt fields." });
       return;
     }
     const db = await loadDB(true);
     if (!db.examAttempts) db.examAttempts = [];
+    if (!db.revisionSessions) db.revisionSessions = [];
 
+    const parsedMarksAvailable = Number(marksAvailable);
+    const parsedMarksScored = Number(marksScored);
+    const parsedSelfMarkingScore = Number(selfMarkingScore || 0);
+
+    // Calculate duration based on: 100 marks per 2h15m (135 mins)
+    // 135 / 100 = 1.35 mins per mark
+    const computedDuration = Math.max(1, Math.round(parsedMarksAvailable * 1.35));
+
+    // Generate unique number ID (string containing only digits)
+    const uniqueIdNum = String(Date.now() + Math.floor(Math.random() * 1000000));
+
+    // 1. Create entry for examAttempts table
     const newAttempt = {
-      id: "ea-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      id: uniqueIdNum,
       studentUsername: String(studentUsername).trim(),
       component: String(component).trim(),
       topic: String(topic).trim(),
       questionWording: String(questionWording).trim(),
-      marksAvailable: Number(marksAvailable),
-      marksScored: Number(marksScored),
-      selfMarkingScore: Number(selfMarkingScore || 0),
-      date: String(date || new Date().toISOString().split("T")[0]).trim()
+      marksAvailable: parsedMarksAvailable,
+      marksScored: parsedMarksScored,
+      selfMarkingScore: parsedSelfMarkingScore,
+      date: String(date || new Date().toISOString().split("T")[0]).trim(),
+      rag: (rag || "green") as "red" | "amber" | "green" // linked rag rating tag!
+    };
+
+    // 2. Create entry for revision_sessions table using the same template
+    // topic = questionWording, comments = component, score, self score, topic area
+    const examMeta = {
+      component: String(component).trim(),
+      marksScored: parsedMarksScored,
+      marksAvailable: parsedMarksAvailable,
+      selfMarkingScore: parsedSelfMarkingScore,
+      topicArea: String(topic).trim(),
+      rag: (rag || "green") as "red" | "amber" | "green"
+    };
+
+    const formattedComment = `Component: ${examMeta.component} | Score: ${examMeta.marksScored}/${examMeta.marksAvailable} | Self Assessed Score: ${examMeta.selfMarkingScore}/10 | Topic Area: ${examMeta.topicArea} __EXAM_METADATA__:${JSON.stringify(examMeta)}`;
+
+    const newSession = {
+      id: uniqueIdNum, // use the same unique number ID so they are linked
+      studentUsername: String(studentUsername).trim(),
+      date: String(date || new Date().toISOString().split("T")[0]).trim(),
+      duration: computedDuration,
+      topic: String(questionWording).trim(), // wording of the question fills the topic field
+      rag: (rag || "green") as "red" | "amber" | "green",
+      comment: formattedComment
     };
 
     db.examAttempts.push(newAttempt);
+    db.revisionSessions.push(newSession);
+
     await saveDB(db);
 
-    res.json({ success: true, attempt: newAttempt });
+    res.json({ success: true, attempt: newAttempt, session: newSession });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1423,8 +1491,12 @@ app.delete("/api/student/exam-attempt/:id", async (req, res) => {
     const { id } = req.params;
     const db = await loadDB(true);
     if (!db.examAttempts) db.examAttempts = [];
+    if (!db.revisionSessions) db.revisionSessions = [];
 
+    // Filter out from both to keep them in sync
     db.examAttempts = db.examAttempts.filter(a => a.id !== id);
+    db.revisionSessions = db.revisionSessions.filter(s => s.id !== id);
+
     await saveDB(db);
     res.json({ success: true });
   } catch (err: any) {
