@@ -1552,16 +1552,18 @@ app.delete("/api/student/revision-service/:id", async (req, res) => {
 // 17. LOG SERVICE DURATION
 app.post("/api/student/revision-services/log", async (req, res) => {
   try {
-    const { studentUsername, serviceId, serviceName, duration, date } = req.body;
+    const { studentUsername, serviceId, serviceName, duration, date, rag } = req.body;
     if (!studentUsername || !serviceId || !serviceName || duration === undefined || !date) {
       res.status(400).json({ error: "Missing required service log fields." });
       return;
     }
     const db = await loadDB(true);
     if (!db.revisionServiceLogs) db.revisionServiceLogs = [];
+    if (!db.revisionSessions) db.revisionSessions = [];
 
+    const newLogId = "rsl-" + Date.now() + Math.random().toString(36).substring(4, 7);
     const newLog = {
-      id: "rsl-" + Date.now() + Math.random().toString(36).substring(4, 7),
+      id: newLogId,
       studentUsername: String(studentUsername).trim(),
       serviceId: String(serviceId).trim(),
       serviceName: String(serviceName).trim(),
@@ -1569,10 +1571,23 @@ app.post("/api/student/revision-services/log", async (req, res) => {
       date: String(date).trim()
     };
 
+    // Generate matching unique session ID (string with digits only for DB compliance)
+    const uniqueSessionId = String(Date.now() + Math.floor(Math.random() * 1000000));
+    const newSession = {
+      id: uniqueSessionId,
+      studentUsername: String(studentUsername).trim(),
+      date: String(date).trim(),
+      duration: Number(duration),
+      topic: `Study on ${serviceName}`,
+      rag: (rag || "green") as "red" | "amber" | "green",
+      comment: `Logged automatically via external app: ${serviceName} __EXTERNAL_APP__:${serviceName}`
+    };
+
     db.revisionServiceLogs.push(newLog);
+    db.revisionSessions.push(newSession);
     await saveDB(db);
 
-    res.json({ success: true, log: newLog });
+    res.json({ success: true, log: newLog, session: newSession });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
