@@ -118,6 +118,8 @@ export default function App() {
 
   // Student Revision tracker states
   const [studentTab, setStudentTab] = useState<"my-progress" | "wild-cat-arena" | "revision-progress">("my-progress");
+  const [arenaRankTab, setArenaRankTab] = useState<"aggregate" | "assessments" | "revision">("aggregate");
+  const [arenaGroupFilter, setArenaGroupFilter] = useState<string>("ALL");
   const [revisionSessions, setRevisionSessions] = useState<RevisionSession[]>([]);
   const [examAttempts, setExamAttempts] = useState<ExamAttempt[]>([]);
   const [revisionServices, setRevisionServices] = useState<RevisionService[]>([]);
@@ -1608,12 +1610,19 @@ export default function App() {
 
   // Active call to load leaderboard across all groups
   const [globalScores, setGlobalScores] = useState<ScoreEntry[]>([]);
+  const [globalRevisionSessions, setGlobalRevisionSessions] = useState<any[]>([]);
+  const [globalRevisionServiceLogs, setGlobalRevisionServiceLogs] = useState<any[]>([]);
+  const [globalStudents, setGlobalStudents] = useState<any[]>([]);
+
   const loadGlobalScoresForArena = async () => {
     try {
       const res = await fetch(`/api/scores?t=${Date.now()}`);
       const data = await res.json();
       if (data.success) {
-        setGlobalScores(data.scores);
+        setGlobalScores(data.scores || []);
+        setGlobalRevisionSessions(data.revisionSessions || []);
+        setGlobalRevisionServiceLogs(data.revisionServiceLogs || []);
+        setGlobalStudents(data.students || []);
       }
     } catch (err) {
       console.error("Failed to query overall scores", err);
@@ -1627,40 +1636,152 @@ export default function App() {
   }, [currentUser, currentPage]);
 
   const getArenaRanking = () => {
-    // Group records by unique studentNickname
-    const studentsSummary: {
-      [nickname: string]: {
-        nickname: string;
-        classGroup: string;
-        averagePercentage: number;
-        testsCount: number;
-        academicYear: string;
-      };
-    } = {};
+    const activeScores = currentUser?.role === "teacher" ? (teacherData?.scores || []) : globalScores;
+    const activeRevisionSessions = currentUser?.role === "teacher" ? (teacherData?.revisionSessions || []) : globalRevisionSessions;
+    const activeRevisionLogs = currentUser?.role === "teacher" ? (teacherData?.revisionServiceLogs || []) : globalRevisionServiceLogs;
+    const activeStudents = currentUser?.role === "teacher" ? (teacherData?.students || []) : globalStudents;
 
-    const validScores = Array.isArray(globalScores) ? globalScores : [];
-    validScores.forEach(s => {
-      if (!s || !s.studentNickname) return;
-      if (!studentsSummary[s.studentNickname]) {
-        studentsSummary[s.studentNickname] = {
-          nickname: s.studentNickname,
-          classGroup: s.classGroup || "A",
-          averagePercentage: 0,
-          testsCount: 0,
-          academicYear: s.academicYear || "26-27"
-        };
+    // 1. Identify all unique students across all datasets
+    const candidatesMap = new Map<string, {
+      nickname: string;
+      classGroup: string;
+      academicYear: string;
+      username: string;
+    }>();
+
+    // Populate from student metadata list
+    if (Array.isArray(activeStudents)) {
+      activeStudents.forEach(st => {
+        if (!st || !st.nickname) return;
+        candidatesMap.set(st.nickname.toLowerCase().trim(), {
+          nickname: st.nickname,
+          classGroup: st.classGroup || "A",
+          academicYear: st.academicYear || "26-27",
+          username: st.username || ""
+        });
+      });
+    }
+
+    // Populate from scores
+    if (Array.isArray(activeScores)) {
+      activeScores.forEach(s => {
+        if (!s || !s.studentNickname) return;
+        const key = s.studentNickname.toLowerCase().trim();
+        if (!candidatesMap.has(key)) {
+          candidatesMap.set(key, {
+            nickname: s.studentNickname,
+            classGroup: s.classGroup || "A",
+            academicYear: s.academicYear || "26-27",
+            username: s.studentUsername || ""
+          });
+        }
+      });
+    }
+
+    // Populate from revision sessions
+    if (Array.isArray(activeRevisionSessions)) {
+      activeRevisionSessions.forEach(s => {
+        if (!s || !s.studentNickname) return;
+        const key = s.studentNickname.toLowerCase().trim();
+        if (!candidatesMap.has(key)) {
+          candidatesMap.set(key, {
+            nickname: s.studentNickname,
+            classGroup: s.classGroup || "A",
+            academicYear: s.academicYear || "26-27",
+            username: s.studentUsername || ""
+          });
+        }
+      });
+    }
+
+    const candidates = Array.from(candidatesMap.values());
+
+    // 2. Pre-calculate total time for normalization
+    const timeTotalsMap = new Map<string, number>();
+    let maxTotalTime = 1; // avoid division by zero
+
+    candidates.forEach(c => {
+      const sSess = (activeRevisionSessions || []).filter(item => {
+        if (c.username && item.studentUsername) return item.studentUsername.toLowerCase() === c.username.toLowerCase();
+        return item.studentNickname && item.studentNickname.toLowerCase().trim() === c.nickname.toLowerCase().trim();
+      });
+      const sLogs = (activeRevisionLogs || []).filter(item => {
+        if (c.username && item.studentUsername) return item.studentUsername.toLowerCase() === c.username.toLowerCase();
+        return item.studentNickname && item.studentNickname.toLowerCase().trim() === c.nickname.toLowerCase().trim();
+      });
+      const tMins = sSess.reduce((sum, s) => sum + s.duration, 0) + sLogs.reduce((sum, l) => sum + l.duration, 0);
+      timeTotalsMap.set(c.nickname.toLowerCase().trim(), tMins);
+      if (tMins > maxTotalTime) {
+        maxTotalTime = tMins;
       }
-      studentsSummary[s.studentNickname].averagePercentage += s.percentage;
-      studentsSummary[s.studentNickname].testsCount += 1;
     });
 
-    const list = Object.values(studentsSummary).map(student => ({
-      ...student,
-      averagePercentage: parseFloat((student.averagePercentage / student.testsCount).toFixed(2))
-    }));
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
 
-    // Sort descending by performance average
-    return list.sort((a, b) => b.averagePercentage - a.averagePercentage);
+    // 3. Compute metrics for all candidates
+    let list = candidates.map(c => {
+      const key = c.nickname.toLowerCase().trim();
+      const studScores = (activeScores || []).filter(s => s.studentNickname && s.studentNickname.toLowerCase().trim() === key);
+      const scoreAverage = studScores.length > 0
+        ? parseFloat((studScores.reduce((sum, s) => sum + s.percentage, 0) / studScores.length).toFixed(2))
+        : 0;
+
+      const sSess = (activeRevisionSessions || []).filter(item => {
+        if (c.username && item.studentUsername) return item.studentUsername.toLowerCase() === c.username.toLowerCase();
+        return item.studentNickname && item.studentNickname.toLowerCase().trim() === key;
+      });
+      const sLogs = (activeRevisionLogs || []).filter(item => {
+        if (c.username && item.studentUsername) return item.studentUsername.toLowerCase() === c.username.toLowerCase();
+        return item.studentNickname && item.studentNickname.toLowerCase().trim() === key;
+      });
+
+      const totalTimeMins = timeTotalsMap.get(key) || 0;
+
+      // Compute weekly revision time for student
+      const studWeeklySessionsMins = sSess
+        .filter(s => s.date && new Date(s.date) >= sevenDaysAgo)
+        .reduce((sum, s) => sum + s.duration, 0);
+      const studWeeklyLogsMins = sLogs
+        .filter(l => l.date && new Date(l.date) >= sevenDaysAgo)
+        .reduce((sum, l) => sum + l.duration, 0);
+      const weeklyMins = studWeeklySessionsMins + studWeeklyLogsMins;
+
+      // Normalize total revision time on a 0 to 100 scale
+      const timeScore = (totalTimeMins / maxTotalTime) * 100;
+
+      // Weighted total of 50% for total time and 50% for score average
+      const aggregateScore = parseFloat((0.5 * scoreAverage + 0.5 * timeScore).toFixed(2));
+
+      return {
+        nickname: c.nickname,
+        classGroup: c.classGroup,
+        academicYear: c.academicYear,
+        averagePercentage: scoreAverage,
+        testsCount: studScores.length,
+        totalTimeMins,
+        weeklyMins,
+        aggregateScore
+      };
+    });
+
+    // 4. Apply group filtering if not "ALL"
+    if (arenaGroupFilter !== "ALL") {
+      list = list.filter(student => student.classGroup.toUpperCase() === arenaGroupFilter.toUpperCase());
+    }
+
+    // 5. Sort list based on active tab
+    if (arenaRankTab === "assessments") {
+      list.sort((a, b) => b.averagePercentage - a.averagePercentage);
+    } else if (arenaRankTab === "revision") {
+      list.sort((a, b) => b.totalTimeMins - a.totalTimeMins);
+    } else {
+      // "aggregate"
+      list.sort((a, b) => b.aggregateScore - a.aggregateScore);
+    }
+
+    return list;
   };
 
   const arenaList = getArenaRanking();
@@ -5312,156 +5433,244 @@ export default function App() {
         )}
 
         {/* COMPREHENSIVE WILD CAT ARENA (LEADERBOARD) */}
-        {currentPage === "leaderboard" && currentUser && (
-          <div className="space-y-8 animate-fade-in">
-            
-            {/* Greetings Bar */}
-            <div className="pb-6 border-b border-purple-950/40">
-              <span className="text-xs font-mono text-purple-400 font-bold uppercase tracking-wider">Apex Interactive Rankings</span>
-              <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-white mt-1">
-                The Wild Cat <span className="text-purple-400">Arena</span>
-              </h2>
-              <p className="text-xs text-neutral-400 mt-1">
-                A high-privacy tracking platform which preserves student confidentiality using generated wild cat names. Compare overall weighted average performances across all class groups.
-              </p>
-            </div>
+        {currentPage === "leaderboard" && currentUser && (() => {
+          const formatPodiumMetric = (student: any) => {
+            if (arenaRankTab === "assessments") {
+              return `${student.averagePercentage}%`;
+            } else if (arenaRankTab === "revision") {
+              return `${(student.totalTimeMins / 60).toFixed(1)} hrs`;
+            } else {
+              return `${student.aggregateScore}%`;
+            }
+          };
 
-            {/* Podium Spotlights */}
-            {arenaList.length > 0 && (
-              <div className="grid md:grid-cols-3 gap-6 items-end pt-4 max-w-4xl mx-auto">
+          const getMetricLabel = () => {
+            if (arenaRankTab === "assessments") {
+              return "Assessment Average";
+            } else if (arenaRankTab === "revision") {
+              return "Total Revision";
+            } else {
+              return "Weighted Performance";
+            }
+          };
+
+          return (
+            <div className="space-y-8 animate-fade-in">
+              
+              {/* Greetings Bar */}
+              <div className="pb-6 border-b border-purple-950/40">
+                <span className="text-xs font-mono text-purple-400 font-bold uppercase tracking-wider">Apex Interactive Rankings</span>
+                <h2 className="font-display text-2xl sm:text-3xl font-extrabold text-white mt-1">
+                  The Wild Cat <span className="text-purple-400">Arena</span>
+                </h2>
+              </div>
+
+              {/* Controls Bar: Mode Switcher & Class Filter */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-neutral-950/40 p-4 rounded-3xl border border-purple-950/45">
                 
-                {/* 2nd Place */}
-                {arenaList[1] && (
-                  <div className="bg-neutral-950/60 border border-purple-950 rounded-3xl p-6 text-center shadow-lg transform hover:-translate-y-1 transition flex flex-col items-center justify-between min-h-[180px] order-2 md:order-1">
-                    <div className="space-y-2">
-                      <span className="text-lg font-black font-mono text-slate-400">02</span>
-                      <p className="font-semibold text-white truncate max-w-[160px]">{arenaList[1].nickname}</p>
-                      <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400 font-mono">
-                        Group {arenaList[1].classGroup}
-                      </span>
-                    </div>
-                    <div className="mt-4">
-                      <p className="text-xs text-neutral-500">Average Performance</p>
-                      <p className="text-xl font-mono font-black text-purple-300">{arenaList[1].averagePercentage}%</p>
-                    </div>
-                  </div>
-                )}
+                {/* Ranking Metric Tabs */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setArenaRankTab("aggregate")}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer ${
+                      arenaRankTab === "aggregate"
+                        ? "bg-purple-700 text-white shadow-md shadow-purple-950/50"
+                        : "bg-neutral-900/60 text-neutral-400 hover:text-white hover:bg-neutral-900 border border-transparent"
+                    }`}
+                  >
+                    🏆 Overall Power (50-50 Weighted)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setArenaRankTab("assessments")}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer ${
+                      arenaRankTab === "assessments"
+                        ? "bg-purple-700 text-white shadow-md shadow-purple-950/50"
+                        : "bg-neutral-900/60 text-neutral-400 hover:text-white hover:bg-neutral-900 border border-transparent"
+                    }`}
+                  >
+                    📝 Assessments (Score Avg)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setArenaRankTab("revision")}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold tracking-wide uppercase transition-all duration-200 cursor-pointer ${
+                      arenaRankTab === "revision"
+                        ? "bg-purple-700 text-white shadow-md shadow-purple-950/50"
+                        : "bg-neutral-900/60 text-neutral-400 hover:text-white hover:bg-neutral-900 border border-transparent"
+                    }`}
+                  >
+                    ⏱️ Revision Time (Total)
+                  </button>
+                </div>
 
-                {/* 1st Place (Winner Banner) */}
-                {arenaList[0] && (
-                  <div className="bg-neutral-950 border-2 border-amber-500/40 rounded-3xl p-8 text-center shadow-2xl relative overflow-hidden transform hover:-translate-y-2.5 transition flex flex-col items-center justify-between min-h-[220px] order-1 md:order-2">
-                    {/* Glowing highlight element */}
-                    <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-amber-500 to-yellow-300"></div>
-                    <div className="absolute -inset-0.5 rounded-3xl bg-amber-500/5 blur opacity-25"></div>
-                    
-                    <div className="space-y-2">
-                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 text-lg font-extrabold shadow-inner mb-2 animate-pulse">
-                        👑
-                      </div>
-                      <p className="font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-yellow-200 text-lg truncate max-w-[180px]">
-                        {arenaList[0].nickname}
-                      </p>
-                      <span className="text-[10px] bg-amber-950/40 border border-amber-900/40 px-2.5 py-0.5 rounded-full text-amber-300 font-bold tracking-wide uppercase font-mono">
-                        Apex Predator • Group {arenaList[0].classGroup}
-                      </span>
-                    </div>
-
-                    <div className="mt-4">
-                      <p className="text-xs text-amber-500/70 uppercase tracking-widest font-bold">Cohorts Master</p>
-                      <p className="text-2xl font-mono font-black text-white">{arenaList[0].averagePercentage}%</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3rd Place */}
-                {arenaList[2] && (
-                  <div className="bg-neutral-950/60 border border-purple-950 rounded-3xl p-6 text-center shadow-lg transform hover:-translate-y-1 transition flex flex-col items-center justify-between min-h-[170px] order-3">
-                    <div className="space-y-2">
-                      <span className="text-lg font-black font-mono text-amber-705/70">03</span>
-                      <p className="font-semibold text-white truncate max-w-[160px]">{arenaList[2].nickname}</p>
-                      <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400 font-mono">
-                        Group {arenaList[2].classGroup}
-                      </span>
-                    </div>
-                    <div className="mt-4">
-                      <p className="text-xs text-neutral-500">Average Performance</p>
-                      <p className="text-xl font-mono font-black text-purple-300">{arenaList[2].averagePercentage}%</p>
-                    </div>
-                  </div>
-                )}
+                {/* Class Group Ranking Filter */}
+                <div className="flex items-center space-x-2.5">
+                  <span className="text-xs text-neutral-400 font-mono">Scope:</span>
+                  <select
+                    value={arenaGroupFilter}
+                    onChange={(e) => setArenaGroupFilter(e.target.value)}
+                    className="bg-neutral-950 border border-purple-950/80 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600/40 cursor-pointer"
+                  >
+                    <option value="ALL">Overall Psychology Ranking</option>
+                    <option value="A">Group A</option>
+                    <option value="B">Group B</option>
+                    <option value="C">Group C</option>
+                    <option value="D">Group D</option>
+                  </select>
+                </div>
 
               </div>
-            )}
 
-            {/* Arena Standings Board */}
-            <div className="bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl max-w-4xl mx-auto">
-              <h3 className="text-sm font-semibold text-purple-300/90 flex items-center space-x-2 border-b border-purple-950/35 pb-4 mb-4">
-                <Users className="w-5 h-5 text-purple-400" />
-                <span>Leaderboard Standing Matrix ({arenaList.length} unique candidates tracked)</span>
-              </h3>
+              {/* Podium Spotlights */}
+              {arenaList.length > 0 && (
+                <div className="grid md:grid-cols-3 gap-6 items-end pt-4 max-w-4xl mx-auto">
+                  
+                  {/* 2nd Place */}
+                  {arenaList[1] && (
+                    <div className="bg-neutral-950/60 border border-purple-950 rounded-3xl p-6 text-center shadow-lg transform hover:-translate-y-1 transition flex flex-col items-center justify-between min-h-[180px] order-2 md:order-1">
+                      <div className="space-y-2">
+                        <span className="text-lg font-black font-mono text-slate-400">02</span>
+                        <p className="font-semibold text-white truncate max-w-[160px]">{arenaList[1].nickname}</p>
+                        <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400 font-mono">
+                          Group {arenaList[1].classGroup}
+                        </span>
+                      </div>
+                      <div className="mt-4">
+                        <p className="text-xs text-neutral-500">{getMetricLabel()}</p>
+                        <p className="text-xl font-mono font-black text-purple-300">{formatPodiumMetric(arenaList[1])}</p>
+                      </div>
+                    </div>
+                  )}
 
-              <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-                {arenaList.length > 0 ? (
-                  arenaList.map((rank, index) => {
-                    const isMe = rank.nickname === currentUser.nickname;
-                    const gradeSticker = getGradeSticker(rank.averagePercentage);
-                    return (
-                      <div
-                        id={`arena-rank-row-${index}`}
-                        key={rank.nickname}
-                        className={`p-4 rounded-2xl border transition flex items-center justify-between gap-4 ${
-                          isMe
-                            ? "bg-purple-900/20 border-purple-600 shadow-lg shadow-purple-600/10"
-                            : "bg-neutral-900/40 border-neutral-850/60 hover:bg-neutral-900"
-                        }`}
-                      >
-                        <div className="flex items-center space-x-4 min-w-[70%]">
-                          <span className={`h-8 w-8 rounded-xl font-mono text-sm font-bold flex items-center justify-center border ${
-                            index === 0
-                              ? "bg-amber-500/10 border-amber-500/30 text-amber-400 font-extrabold"
-                              : index === 1
-                              ? "bg-slate-500/10 border-slate-500/30 text-slate-300"
-                              : "bg-purple-950/30 border-purple-950 text-neutral-400"
-                          }`}>
-                            {index + 1}
-                          </span>
+                  {/* 1st Place (Winner Banner) */}
+                  {arenaList[0] && (
+                    <div className="bg-neutral-950 border-2 border-amber-500/40 rounded-3xl p-8 text-center shadow-2xl relative overflow-hidden transform hover:-translate-y-2.5 transition flex flex-col items-center justify-between min-h-[220px] order-1 md:order-2">
+                      {/* Glowing highlight element */}
+                      <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-amber-500 to-yellow-300"></div>
+                      <div className="absolute -inset-0.5 rounded-3xl bg-amber-500/5 blur opacity-25"></div>
+                      
+                      <div className="space-y-2">
+                        <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 text-lg font-extrabold shadow-inner mb-2 animate-pulse">
+                          👑
+                        </div>
+                        <p className="font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-yellow-200 text-lg truncate max-w-[180px]">
+                          {arenaList[0].nickname}
+                        </p>
+                        <span className="text-[10px] bg-amber-950/40 border border-amber-900/40 px-2.5 py-0.5 rounded-full text-amber-300 font-bold tracking-wide uppercase font-mono">
+                          Apex Predator • Group {arenaList[0].classGroup}
+                        </span>
+                      </div>
 
-                          <div className="truncate">
-                            <span className="font-semibold text-white text-sm flex items-center space-x-1.5 truncate">
-                              <span>{rank.nickname}</span>
-                              {isMe && (
-                                <span className="bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 rounded-full text-[9px] uppercase font-bold tracking-wider text-purple-300">
-                                  You
-                                </span>
-                              )}
+                      <div className="mt-4">
+                        <p className="text-xs text-amber-500/70 uppercase tracking-widest font-bold">{getMetricLabel()}</p>
+                        <p className="text-2xl font-mono font-black text-white">{formatPodiumMetric(arenaList[0])}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3rd Place */}
+                  {arenaList[2] && (
+                    <div className="bg-neutral-950/60 border border-purple-950 rounded-3xl p-6 text-center shadow-lg transform hover:-translate-y-1 transition flex flex-col items-center justify-between min-h-[170px] order-3">
+                      <div className="space-y-2">
+                        <span className="text-lg font-black font-mono text-amber-705/70">03</span>
+                        <p className="font-semibold text-white truncate max-w-[160px]">{arenaList[2].nickname}</p>
+                        <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400 font-mono">
+                          Group {arenaList[2].classGroup}
+                        </span>
+                      </div>
+                      <div className="mt-4">
+                        <p className="text-xs text-neutral-500">{getMetricLabel()}</p>
+                        <p className="text-xl font-mono font-black text-purple-300">{formatPodiumMetric(arenaList[2])}</p>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              )}
+
+              {/* Arena Standings Board */}
+              <div className="bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl max-w-4xl mx-auto">
+                <h3 className="text-sm font-semibold text-purple-300/90 flex items-center justify-between border-b border-purple-950/35 pb-4 mb-4">
+                  <div className="flex items-center space-x-2">
+                    <Users className="w-5 h-5 text-purple-400" />
+                    <span>Leaderboard</span>
+                  </div>
+                  <span className="text-xs font-mono text-neutral-400 font-normal">
+                    current participants: {arenaList.length}
+                  </span>
+                </h3>
+
+                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                  {arenaList.length > 0 ? (
+                    arenaList.map((rank, index) => {
+                      const isMe = rank.nickname === currentUser.nickname;
+                      return (
+                        <div
+                          id={`arena-rank-row-${index}`}
+                          key={rank.nickname}
+                          className={`p-4 rounded-2xl border transition flex items-center justify-between gap-4 ${
+                            isMe
+                              ? "bg-purple-900/20 border-purple-600 shadow-lg shadow-purple-600/10"
+                              : "bg-neutral-900/40 border-neutral-850/60 hover:bg-neutral-900"
+                          }`}
+                        >
+                          <div className="flex items-center space-x-4 min-w-[70%]">
+                            <span className={`h-8 w-8 rounded-xl font-mono text-sm font-bold flex items-center justify-center border ${
+                              index === 0
+                                ? "bg-amber-500/10 border-amber-500/30 text-amber-400 font-extrabold"
+                                : index === 1
+                                ? "bg-slate-500/10 border-slate-500/30 text-slate-300"
+                                : "bg-purple-950/30 border-purple-950 text-neutral-400"
+                            }`}>
+                              {index + 1}
                             </span>
-                            <p className="font-mono text-[10px] text-neutral-500 mt-1">
-                              Class Group {rank.classGroup} • Cycle: {rank.academicYear} • Solved {rank.testsCount} Assessments
-                            </p>
+
+                            <div className="truncate">
+                              <span className="font-semibold text-white text-sm flex items-center space-x-1.5 truncate">
+                                <span>{rank.nickname}</span>
+                                {isMe && (
+                                  <span className="bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 rounded-full text-[9px] uppercase font-bold tracking-wider text-purple-300">
+                                    You
+                                  </span>
+                                )}
+                              </span>
+                              <p className="font-mono text-[10px] text-neutral-500 mt-1">
+                                Class Group {rank.classGroup} • Cycle: {rank.academicYear}
+                              </p>
+                              <p className="text-xs text-neutral-400 mt-1">
+                                Weekly Revision: <span className="font-mono font-bold text-purple-350">{rank.weeklyMins} mins</span> • Score Avg: <span className="font-mono font-bold text-purple-350">{rank.averagePercentage}%</span>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right">
+                            <span className="font-mono font-bold text-sm text-purple-300 block">
+                              {arenaRankTab === "assessments"
+                                ? `${rank.averagePercentage}%`
+                                : arenaRankTab === "revision"
+                                ? `${(rank.totalTimeMins / 60).toFixed(1)} hrs`
+                                : `${rank.aggregateScore}%`}
+                            </span>
+                            <span className="text-[10px] font-mono text-neutral-500 block uppercase">
+                              {arenaRankTab === "assessments" ? "Score Avg" : arenaRankTab === "revision" ? "Rev Hours" : "Weighted"}
+                            </span>
                           </div>
                         </div>
-
-                        <div className="text-right">
-                          <span className="font-mono font-bold text-sm text-purple-300 block">
-                            {rank.averagePercentage}%
-                          </span>
-                          <span className={`inline-block px-2 py-0.5 text-[8px] font-bold rounded tracking-wider uppercase border border-neutral-800 ${gradeSticker.color}`}>
-                            Bound: {gradeSticker.name}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="text-center p-8 text-neutral-600 font-medium">
-                    No classroom achievements have sparked yet. Submit scores to rise in the Wilderness rankings list.
-                  </div>
-                )}
+                      );
+                    })
+                  ) : (
+                    <div className="text-center p-8 text-neutral-600 font-medium">
+                      No classroom achievements have sparked yet. Submit scores to rise in the Wilderness rankings list.
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
 
-          </div>
-        )}
+            </div>
+          );
+        })()}
 
       </div>
 
