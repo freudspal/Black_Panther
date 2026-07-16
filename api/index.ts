@@ -1560,8 +1560,21 @@ app.get("/api/scores", async (req, res) => {
       const filtered = nonSpecialScores.filter(s => s.studentUsername === studentUsername);
       res.json({ success: true, scores: filtered });
     } else {
-      // Return all scores for teacher module
-      res.json({ success: true, scores: nonSpecialScores });
+      // Return all scores, but also non-sensitive student metadata and revision stats for the leaderboard
+      const studentsList = db.students.map(s => ({
+        username: s.username,
+        nickname: s.nickname,
+        classGroup: s.classGroup,
+        academicYear: s.academicYear
+      }));
+
+      res.json({
+        success: true,
+        scores: nonSpecialScores,
+        revisionSessions: db.revisionSessions || [],
+        revisionServiceLogs: db.revisionServiceLogs || [],
+        students: studentsList
+      });
     }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
