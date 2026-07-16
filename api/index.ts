@@ -1218,6 +1218,10 @@ app.post("/api/scores", async (req, res) => {
 
     const maxScore = test.maxScore;
     const rawScore = Number(score);
+    if (isNaN(rawScore) || rawScore < 0 || rawScore > maxScore) {
+      res.status(400).json({ error: `Score must be between 0 and the maximum marks limit of ${maxScore}.` });
+      return;
+    }
     const percentage = Number(((rawScore / maxScore) * 100).toFixed(2));
     const grade = determineGrade(percentage);
 
@@ -1498,6 +1502,10 @@ app.post("/api/teacher/bulk-import", async (req, res) => {
 
       if (exists) {
         duplicateCount++;
+        continue;
+      }
+
+      if (isNaN(rawScore) || rawScore < 0 || rawScore > test.maxScore) {
         continue;
       }
 
