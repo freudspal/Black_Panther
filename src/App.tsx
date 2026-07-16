@@ -1902,26 +1902,108 @@ export default function App() {
     ];
   })();
 
-  // Calculation of weekly revision time
+  // Internal state for revision display mode
+  const [revisionDisplayMode, setRevisionDisplayMode] = useState<"dial" | "histogram">("dial");
+
+  // Calculation of weekly revision time (Monday to Sunday)
   const getWeeklyMinutes = () => {
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    sevenDaysAgo.setHours(0, 0, 0, 0); // Start of day 7 days ago
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysSinceMonday = currentDay === 0 ? 6 : currentDay - 1;
     
+    const thisWeekStart = new Date(now);
+    thisWeekStart.setDate(now.getDate() - daysSinceMonday);
+    thisWeekStart.setHours(0, 0, 0, 0);
+    
+    const thisWeekEnd = new Date(thisWeekStart);
+    thisWeekEnd.setDate(thisWeekStart.getDate() + 7); // exclusive of next Monday
+
     const weeklySessions = revisionSessions.filter(s => {
       const sDate = new Date(s.date);
-      return sDate >= sevenDaysAgo;
+      return sDate >= thisWeekStart && sDate < thisWeekEnd;
     });
     
     const weeklyLogs = revisionServiceLogs.filter(l => {
       const lDate = new Date(l.date);
-      return lDate >= sevenDaysAgo;
+      return lDate >= thisWeekStart && lDate < thisWeekEnd;
     });
     
     const sessMins = weeklySessions.reduce((sum, s) => sum + s.duration, 0);
     const logMins = weeklyLogs.reduce((sum, l) => sum + l.duration, 0);
     
     return sessMins + logMins;
+  };
+
+  const getLastWeekMinutes = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysSinceMonday = currentDay === 0 ? 6 : currentDay - 1;
+    
+    const thisWeekStart = new Date(now);
+    thisWeekStart.setDate(now.getDate() - daysSinceMonday);
+    thisWeekStart.setHours(0, 0, 0, 0);
+    
+    const lastWeekStart = new Date(thisWeekStart);
+    lastWeekStart.setDate(thisWeekStart.getDate() - 7);
+    
+    const lastWeekEnd = new Date(thisWeekStart); // up to this week's start (exclusive)
+
+    const lastWeekSessions = revisionSessions.filter(s => {
+      const sDate = new Date(s.date);
+      return sDate >= lastWeekStart && sDate < lastWeekEnd;
+    });
+    
+    const lastWeekLogs = revisionServiceLogs.filter(l => {
+      const lDate = new Date(l.date);
+      return lDate >= lastWeekStart && lDate < lastWeekEnd;
+    });
+    
+    const sessMins = lastWeekSessions.reduce((sum, s) => sum + s.duration, 0);
+    const logMins = lastWeekLogs.reduce((sum, l) => sum + l.duration, 0);
+    
+    return sessMins + logMins;
+  };
+
+  const getWeeklyHistogramData = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysSinceMonday = currentDay === 0 ? 6 : currentDay - 1;
+    
+    const thisWeekStart = new Date(now);
+    thisWeekStart.setDate(now.getDate() - daysSinceMonday);
+    thisWeekStart.setHours(0, 0, 0, 0);
+
+    const histogram = [];
+    for (let i = 3; i >= 0; i--) {
+      const wStart = new Date(thisWeekStart);
+      wStart.setDate(thisWeekStart.getDate() - i * 7);
+      
+      const wEnd = new Date(wStart);
+      wEnd.setDate(wStart.getDate() + 7);
+      
+      const wSessions = revisionSessions.filter(s => {
+        const d = new Date(s.date);
+        return d >= wStart && d < wEnd;
+      });
+      const wLogs = revisionServiceLogs.filter(l => {
+        const d = new Date(l.date);
+        return d >= wStart && d < wEnd;
+      });
+      const wMins = wSessions.reduce((sum, s) => sum + s.duration, 0) + 
+                    wLogs.reduce((sum, l) => sum + l.duration, 0);
+      
+      let label = "";
+      if (i === 0) label = "This Week";
+      else if (i === 1) label = "Last Week";
+      else label = `${i} Wks Ago`;
+      
+      histogram.push({
+        name: label,
+        minutes: wMins,
+        hours: parseFloat((wMins / 60).toFixed(1))
+      });
+    }
+    return histogram;
   };
 
   const weeklyMinutes = getWeeklyMinutes();
@@ -2473,9 +2555,8 @@ export default function App() {
                 {/* REVISION PROGRESS SECTION */}
                 <div className="grid lg:grid-cols-12 gap-8">
                   {/* Left Column: Gauge Dial and External Services */}
-                  <div className="lg:col-span-4 space-y-8">
-                    {/* Gauge Dial Card */}
-                    {/* Gauge Dial Card */}
+                  <div className="lg:col-span-5 space-y-8">
+                    {/* Gauge Dial / Histogram Card */}
                     {(() => {
                       const eyeColor = weeklyMinutes >= 300 
                         ? "#10b981" // glowing emerald green
@@ -2508,222 +2589,309 @@ export default function App() {
                         return "🐾 Off to a fresh start! Every journey begins with a single step.";
                       };
 
+                      const thisWeekHours = (weeklyMinutes / 60).toFixed(1);
+                      const lastWeekMins = getLastWeekMinutes();
+                      const lastWeekHours = (lastWeekMins / 60).toFixed(1);
+                      const histogramData = getWeeklyHistogramData();
+
                       return (
-                        <div className="bg-black border border-purple-950/60 rounded-3xl p-6 shadow-xl text-center relative overflow-hidden transition-all duration-300">
-                          <h3 className="text-sm font-semibold text-neutral-400 flex items-center justify-center space-x-2 mb-4 relative z-10">
-                            <Gauge className="w-4 h-4 text-purple-400 animate-pulse" />
-                            <span>Weekly Revision Dial</span>
+                        <div className="bg-black border border-purple-950/60 rounded-3xl p-6 shadow-xl relative overflow-hidden transition-all duration-300">
+                          <h3 className="text-sm font-semibold text-neutral-400 flex items-center justify-between border-b border-purple-950/40 pb-3 mb-4 relative z-10">
+                            <div className="flex items-center space-x-2">
+                              <Gauge className="w-4 h-4 text-purple-400 animate-pulse" />
+                              <span>Weekly Revision Tracker</span>
+                            </div>
+                            <span className="text-[10px] font-mono text-purple-400 bg-purple-950/40 px-2 py-0.5 rounded-full uppercase font-bold tracking-wider">
+                              Mon - Sun
+                            </span>
                           </h3>
-                          
-                          <div className="relative flex flex-col items-center justify-center h-64 w-64 mx-auto">
-                            <svg className="w-full h-full relative z-10" viewBox="0 0 120 115">
-                              {/* Defs for eye glow filter */}
-                              <defs>
-                                <filter id="eyeGlow" x="-30%" y="-30%" width="160%" height="160%">
-                                  <feGaussianBlur stdDeviation="3" result="blur" />
-                                  <feMerge>
-                                    <feMergeNode in="blur" />
-                                    <feMergeNode in="SourceGraphic" />
-                                  </feMerge>
-                                </filter>
-                              </defs>
 
-                              {/* Panther Ears */}
-                              <g className="transition-all duration-500 ease-in-out">
-                                {/* Left Ear */}
-                                <path
-                                  d="M 15,32 L 8,5 L 38,22 Z"
-                                  fill="#121212"
-                                  stroke="#2e2e2e"
-                                  strokeWidth="1.5"
-                                  strokeLinejoin="round"
-                                />
-                                <path
-                                  d="M 18,29 L 12,9 L 34,22 Z"
-                                  fill="#fda4af"
-                                  opacity="0.25"
-                                  stroke="#fda4af"
-                                  strokeWidth="0.5"
-                                  strokeLinejoin="round"
-                                />
+                          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center relative z-10">
+                            {/* Left Side: Dial or Histogram Visual */}
+                            <div className="md:col-span-7 flex items-center justify-center w-full">
+                              {revisionDisplayMode === "dial" ? (
+                                <div className="relative flex flex-col items-center justify-center h-60 w-60 mx-auto">
+                                  <svg className="w-full h-full relative z-10" viewBox="0 0 120 115">
+                                    {/* Defs for eye glow filter */}
+                                    <defs>
+                                      <filter id="eyeGlow" x="-30%" y="-30%" width="160%" height="160%">
+                                        <feGaussianBlur stdDeviation="3" result="blur" />
+                                        <feMerge>
+                                          <feMergeNode in="blur" />
+                                          <feMergeNode in="SourceGraphic" />
+                                        </feMerge>
+                                      </filter>
+                                    </defs>
 
-                                {/* Right Ear */}
-                                <path
-                                  d="M 105,32 L 112,5 L 82,22 Z"
-                                  fill="#121212"
-                                  stroke="#2e2e2e"
-                                  strokeWidth="1.5"
-                                  strokeLinejoin="round"
-                                />
-                                <path
-                                  d="M 102,29 L 108,9 L 86,22 Z"
-                                  fill="#fda4af"
-                                  opacity="0.25"
-                                  stroke="#fda4af"
-                                  strokeWidth="0.5"
-                                  strokeLinejoin="round"
-                                />
-                              </g>
+                                    {/* Panther Ears */}
+                                    <g className="transition-all duration-500 ease-in-out">
+                                      {/* Left Ear */}
+                                      <path
+                                        d="M 15,32 L 8,5 L 38,22 Z"
+                                        fill="#121212"
+                                        stroke="#2e2e2e"
+                                        strokeWidth="1.5"
+                                        strokeLinejoin="round"
+                                      />
+                                      <path
+                                        d="M 18,29 L 12,9 L 34,22 Z"
+                                        fill="#fda4af"
+                                        opacity="0.25"
+                                        stroke="#fda4af"
+                                        strokeWidth="0.5"
+                                        strokeLinejoin="round"
+                                      />
 
-                              {/* Glowing Panther Eyes in Background */}
-                              <g className="transition-all duration-500 ease-in-out">
-                                {/* Left Eye Glow and Outline */}
-                                <path
-                                  d="M 28,45 C 32,39 44,39 48,45 C 44,51 32,51 28,45 Z"
-                                  fill={eyeColor}
-                                  opacity="0.2"
-                                  filter="url(#eyeGlow)"
-                                />
-                                <path
-                                  d="M 28,45 C 32,39 44,39 48,45 C 44,51 32,51 28,45 Z"
-                                  fill={eyeColor}
-                                  filter="url(#eyeGlow)"
-                                  className="transition-colors duration-500"
-                                />
-                                {/* Left pupil slit */}
-                                <path
-                                  d="M 38,41 Q 39.5,45 38,49 Q 36.5,45 38,41"
-                                  fill="#000000"
-                                />
+                                      {/* Right Ear */}
+                                      <path
+                                        d="M 105,32 L 112,5 L 82,22 Z"
+                                        fill="#121212"
+                                        stroke="#2e2e2e"
+                                        strokeWidth="1.5"
+                                        strokeLinejoin="round"
+                                      />
+                                      <path
+                                        d="M 102,29 L 108,9 L 86,22 Z"
+                                        fill="#fda4af"
+                                        opacity="0.25"
+                                        stroke="#fda4af"
+                                        strokeWidth="0.5"
+                                        strokeLinejoin="round"
+                                      />
+                                    </g>
 
-                                {/* Right Eye Glow and Outline */}
-                                <path
-                                  d="M 72,45 C 76,39 88,39 92,45 C 88,51 76,51 72,45 Z"
-                                  fill={eyeColor}
-                                  opacity="0.2"
-                                  filter="url(#eyeGlow)"
-                                />
-                                <path
-                                  d="M 72,45 C 76,39 88,39 92,45 C 88,51 76,51 72,45 Z"
-                                  fill={eyeColor}
-                                  filter="url(#eyeGlow)"
-                                  className="transition-colors duration-500"
-                                />
-                                {/* Right pupil slit */}
-                                <path
-                                  d="M 82,41 Q 83.5,45 82,49 Q 80.5,45 82,41"
-                                  fill="#000000"
-                                />
-                              </g>
+                                    {/* Glowing Panther Eyes in Background */}
+                                    <g className="transition-all duration-500 ease-in-out">
+                                      {/* Left Eye Glow and Outline */}
+                                      <path
+                                        d="M 28,45 C 32,39 44,39 48,45 C 44,51 32,51 28,45 Z"
+                                        fill={eyeColor}
+                                        opacity="0.2"
+                                        filter="url(#eyeGlow)"
+                                      />
+                                      <path
+                                        d="M 28,45 C 32,39 44,39 48,45 C 44,51 32,51 28,45 Z"
+                                        fill={eyeColor}
+                                        filter="url(#eyeGlow)"
+                                        className="transition-colors duration-500"
+                                      />
+                                      {/* Left pupil slit */}
+                                      <path
+                                        d="M 38,41 Q 39.5,45 38,49 Q 36.5,45 38,41"
+                                        fill="#000000"
+                                      />
 
-                              {/* Panther Nose and Mouth */}
-                              <g className="transition-all duration-500 ease-in-out">
-                                {/* Cute pink nose */}
-                                <path
-                                  d="M 56,54 H 64 L 60,59 Z"
-                                  fill="#fda4af"
-                                  stroke="#fda4af"
-                                  strokeWidth="0.5"
-                                  strokeLinejoin="round"
-                                />
-                                {/* Subtle Mouth Curves */}
-                                <path
-                                  d="M 60,59 L 60,61 A 3,3 0 0,0 57,64 M 60,61 A 3,3 0 0,1 63,64"
-                                  fill="none"
-                                  stroke="#2e2e2e"
-                                  strokeWidth="1"
-                                  strokeLinecap="round"
-                                />
-                              </g>
+                                      {/* Right Eye Glow and Outline */}
+                                      <path
+                                        d="M 72,45 C 76,39 88,39 92,45 C 88,51 76,51 72,45 Z"
+                                        fill={eyeColor}
+                                        opacity="0.2"
+                                        filter="url(#eyeGlow)"
+                                      />
+                                      <path
+                                        d="M 72,45 C 76,39 88,39 92,45 C 88,51 76,51 72,45 Z"
+                                        fill={eyeColor}
+                                        filter="url(#eyeGlow)"
+                                        className="transition-colors duration-500"
+                                      />
+                                      {/* Right pupil slit */}
+                                      <path
+                                        d="M 82,41 Q 83.5,45 82,49 Q 80.5,45 82,41"
+                                        fill="#000000"
+                                      />
+                                    </g>
 
-                              {/* Panther Whiskers */}
-                              <g stroke="#333333" strokeWidth="0.75" strokeLinecap="round">
-                                {/* Left whiskers */}
-                                <line x1="50" y1="59" x2="22" y2="57" />
-                                <line x1="50" y1="61" x2="20" y2="62" />
-                                <line x1="50" y1="63" x2="23" y2="67" />
-                                
-                                {/* Right whiskers */}
-                                <line x1="70" y1="59" x2="98" y2="57" />
-                                <line x1="70" y1="61" x2="100" y2="62" />
-                                <line x1="70" y1="63" x2="97" y2="67" />
-                              </g>
+                                    {/* Panther Nose and Mouth */}
+                                    <g className="transition-all duration-500 ease-in-out">
+                                      {/* Cute pink nose */}
+                                      <path
+                                        d="M 56,54 H 64 L 60,59 Z"
+                                        fill="#fda4af"
+                                        stroke="#fda4af"
+                                        strokeWidth="0.5"
+                                        strokeLinejoin="round"
+                                      />
+                                      {/* Subtle Mouth Curves */}
+                                      <path
+                                        d="M 60,59 L 60,61 A 3,3 0 0,0 57,64 M 60,61 A 3,3 0 0,1 63,64"
+                                        fill="none"
+                                        stroke="#2e2e2e"
+                                        strokeWidth="1"
+                                        strokeLinecap="round"
+                                      />
+                                    </g>
 
-                              {/* Main background arc track (increased size by 20%) */}
-                              <path
-                                d="M 6,75 A 54,54 0 0,1 114,75"
-                                fill="none"
-                                className="stroke-neutral-900/80"
-                                strokeWidth="10"
-                                strokeLinecap="round"
-                              />
-                              
-                              {/* 3 Zones: Red (0-30), Amber (30-300), Green (300-360) with 20% increased radius (54) */}
-                              <g transform="rotate(180 60 75)">
-                                {/* Red Zone (0 to 30 mins) */}
-                                <circle
-                                  cx="60"
-                                  cy="75"
-                                  r="54"
-                                  fill="none"
-                                  stroke="#ef4444"
-                                  strokeWidth="10"
-                                  strokeDasharray="14.14 325.15"
-                                  strokeDashoffset="0"
-                                />
-                                {/* Amber Zone (30 to 300 mins) */}
-                                <circle
-                                  cx="60"
-                                  cy="75"
-                                  r="54"
-                                  fill="none"
-                                  stroke="#f59e0b"
-                                  strokeWidth="10"
-                                  strokeDasharray="127.23 212.06"
-                                  strokeDashoffset="-14.14"
-                                />
-                                {/* Green Zone (300 to 360 mins) */}
-                                <circle
-                                  cx="60"
-                                  cy="75"
-                                  r="54"
-                                  fill="none"
-                                  stroke="#10b981"
-                                  strokeWidth="10"
-                                  strokeDasharray="28.27 311.02"
-                                  strokeDashoffset="-141.37"
-                                />
-                              </g>
+                                    {/* Panther Whiskers */}
+                                    <g stroke="#333333" strokeWidth="0.75" strokeLinecap="round">
+                                      {/* Left whiskers */}
+                                      <line x1="50" y1="59" x2="22" y2="57" />
+                                      <line x1="50" y1="61" x2="20" y2="62" />
+                                      <line x1="50" y1="63" x2="23" y2="67" />
+                                      
+                                      {/* Right whiskers */}
+                                      <line x1="70" y1="59" x2="98" y2="57" />
+                                      <line x1="70" y1="61" x2="100" y2="62" />
+                                      <line x1="70" y1="63" x2="97" y2="67" />
+                                    </g>
 
-                              {/* Black Cat's Paw Pointer (Hand) with 20% scaled length */}
-                              {(() => {
-                                const p = Math.min(weeklyMinutes / 360, 1);
-                                const angle = 180 + p * 180;
-                                return (
-                                  <g transform={`rotate(${angle} 60 75)`}>
-                                    {/* The black arm sleeve */}
+                                    {/* Main background arc track (increased size by 20%) */}
                                     <path
-                                      d="M 60,70 L 95,68 Q 107,70 107,75 Q 107,80 95,82 L 60,80 Z"
-                                      fill="#121212"
-                                      stroke="#1f1f1f"
-                                      strokeWidth="0.75"
+                                      d="M 6,75 A 54,54 0 0,1 114,75"
+                                      fill="none"
+                                      className="stroke-neutral-900/80"
+                                      strokeWidth="10"
+                                      strokeLinecap="round"
                                     />
-                                    {/* Toe backings (black) */}
-                                    <circle cx="102" cy="68" r="4.2" fill="#121212" />
-                                    <circle cx="107" cy="75" r="4.2" fill="#121212" />
-                                    <circle cx="102" cy="82" r="4.2" fill="#121212" />
                                     
-                                    {/* The main pad (black) */}
-                                    <ellipse cx="92" cy="75" rx="8.5" ry="7.5" fill="#121212" />
-                                    
-                                    {/* Cute pink beans */}
-                                    <ellipse cx="91" cy="75" rx="5.5" ry="4.5" fill="#fda4af" />
-                                    <circle cx="102" cy="68" r="2.2" fill="#fda4af" />
-                                    <circle cx="107" cy="75" r="2.2" fill="#fda4af" />
-                                    <circle cx="102" cy="82" r="2.2" fill="#fda4af" />
-                                  </g>
-                                );
-                              })()}
+                                    {/* 3 Zones: Red (0-30), Amber (30-300), Green (300-360) with 20% increased radius (54) */}
+                                    <g transform="rotate(180 60 75)">
+                                      {/* Red Zone (0 to 30 mins) */}
+                                      <circle
+                                        cx="60"
+                                        cy="75"
+                                        r="54"
+                                        fill="none"
+                                        stroke="#ef4444"
+                                        strokeWidth="10"
+                                        strokeDasharray="14.14 325.15"
+                                        strokeDashoffset="0"
+                                      />
+                                      {/* Amber Zone (30 to 300 mins) */}
+                                      <circle
+                                        cx="60"
+                                        cy="75"
+                                        r="54"
+                                        fill="none"
+                                        stroke="#f59e0b"
+                                        strokeWidth="10"
+                                        strokeDasharray="127.23 212.06"
+                                        strokeDashoffset="-14.14"
+                                      />
+                                      {/* Green Zone (300 to 360 mins) */}
+                                      <circle
+                                        cx="60"
+                                        cy="75"
+                                        r="54"
+                                        fill="none"
+                                        stroke="#10b981"
+                                        strokeWidth="10"
+                                        strokeDasharray="28.27 311.02"
+                                        strokeDashoffset="-141.37"
+                                      />
+                                    </g>
 
-                              {/* Center Hub */}
-                              <circle cx="60" cy="75" r="7" fill="#121212" className="stroke-neutral-800 stroke-2" />
-                              <circle cx="60" cy="75" r="2.5" fill="#fda4af" />
-                            </svg>
+                                    {/* Black Cat's Paw Pointer (Hand) with 20% scaled length */}
+                                    {(() => {
+                                      const p = Math.min(weeklyMinutes / 360, 1);
+                                      const angle = 180 + p * 180;
+                                      return (
+                                        <g transform={`rotate(${angle} 60 75)`}>
+                                          {/* The black arm sleeve */}
+                                          <path
+                                            d="M 60,70 L 95,68 Q 107,70 107,75 Q 107,80 95,82 L 60,80 Z"
+                                            fill="#121212"
+                                            stroke="#1f1f1f"
+                                            strokeWidth="0.75"
+                                          />
+                                          {/* Toe backings (black) */}
+                                          <circle cx="102" cy="68" r="4.2" fill="#121212" />
+                                          <circle cx="107" cy="75" r="4.2" fill="#121212" />
+                                          <circle cx="102" cy="82" r="4.2" fill="#121212" />
+                                          
+                                          {/* The main pad (black) */}
+                                          <ellipse cx="92" cy="75" rx="8.5" ry="7.5" fill="#121212" />
+                                          
+                                          {/* Cute pink beans */}
+                                          <ellipse cx="91" cy="75" rx="5.5" ry="4.5" fill="#fda4af" />
+                                          <circle cx="102" cy="68" r="2.2" fill="#fda4af" />
+                                          <circle cx="107" cy="75" r="2.2" fill="#fda4af" />
+                                          <circle cx="102" cy="82" r="2.2" fill="#fda4af" />
+                                        </g>
+                                      );
+                                    })()}
 
-                            {/* Text readout centered overlay - positioned at the bottom below the rotation center */}
-                            <div className="absolute bottom-1 text-center left-0 right-0 z-10">
-                              <p className="text-2xl font-black text-white font-mono leading-none">{weeklyHours}h</p>
-                              <p className="text-[10px] font-mono text-neutral-400 font-extrabold mt-1.5 uppercase tracking-wider">{weeklyMinutes} / 300 mins</p>
+                                    {/* Center Hub */}
+                                    <circle cx="60" cy="75" r="7" fill="#121212" className="stroke-neutral-800 stroke-2" />
+                                    <circle cx="60" cy="75" r="2.5" fill="#fda4af" />
+                                  </svg>
+                                </div>
+                              ) : (
+                                <div className="h-48 w-full flex items-center justify-center">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={histogramData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                                      <CartesianGrid strokeDasharray="3 3" stroke="#161320" vertical={false} />
+                                      <XAxis 
+                                        dataKey="name" 
+                                        stroke="#6b7280" 
+                                        fontSize={10} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                      />
+                                      <YAxis 
+                                        stroke="#6b7280" 
+                                        fontSize={10} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                        tickFormatter={(val) => `${val}h`} 
+                                      />
+                                      <Tooltip 
+                                        cursor={{ fill: '#1e112c', opacity: 0.2 }}
+                                        contentStyle={{ 
+                                          backgroundColor: '#0a0512', 
+                                          borderColor: '#4c1d95', 
+                                          borderRadius: '12px',
+                                          fontSize: '11px',
+                                          color: '#fff'
+                                        }} 
+                                        formatter={(value: any) => [`${value} hours`, 'Revision']}
+                                      />
+                                      <Bar dataKey="hours" radius={[6, 6, 0, 0]}>
+                                        {histogramData.map((entry, index) => {
+                                          const h = entry.hours;
+                                          const color = h >= 5.0 ? '#10b981' : h > 0.5 ? '#f59e0b' : '#ef4444';
+                                          return <Cell key={`cell-${index}`} fill={color} />;
+                                        })}
+                                      </Bar>
+                                    </BarChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right Side: This Week, Last Week & Display Switcher Controls */}
+                            <div className="md:col-span-5 space-y-4">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-3">
+                                {/* This Week */}
+                                <div className="bg-neutral-900/40 border border-purple-950/60 rounded-2xl p-3 text-left">
+                                  <p className="text-[10px] font-mono uppercase tracking-wider text-purple-400 font-bold">This Week</p>
+                                  <p className="text-2xl font-black text-white font-mono mt-1">{thisWeekHours}h</p>
+                                  <p className="text-[10px] font-mono text-neutral-400 mt-0.5">{weeklyMinutes} mins</p>
+                                </div>
+
+                                {/* Last Week */}
+                                <div className="bg-neutral-900/40 border border-purple-950/60 rounded-2xl p-3 text-left">
+                                  <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-500 font-bold">Last Week</p>
+                                  <p className="text-2xl font-black text-neutral-300 font-mono mt-1">{lastWeekHours}h</p>
+                                  <p className="text-[10px] font-mono text-neutral-500 mt-0.5">{lastWeekMins} mins</p>
+                                </div>
+                              </div>
+
+                              {/* Toggle Display Button */}
+                              <button
+                                type="button"
+                                onClick={() => setRevisionDisplayMode(revisionDisplayMode === "dial" ? "histogram" : "dial")}
+                                className="w-full bg-purple-700 hover:bg-purple-650 active:scale-95 text-white py-2 px-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center space-x-2 shadow-md shadow-purple-950/40"
+                              >
+                                {revisionDisplayMode === "dial" ? (
+                                  <>
+                                    <span>📊 View Histogram</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span>🎯 View Panther Dial</span>
+                                  </>
+                                )}
+                              </button>
                             </div>
                           </div>
 
@@ -3036,7 +3204,7 @@ export default function App() {
                   </div>
 
                   {/* Right Column: Revision sessions log book & Exam Question attempts */}
-                  <div className="lg:col-span-8 space-y-8">
+                  <div className="lg:col-span-7 space-y-8">
                     {/* Internal Subtabs switcher */}
                     <div className="flex bg-neutral-950/50 p-1.5 rounded-xl border border-purple-950/50 gap-2">
                       <button
@@ -5479,7 +5647,7 @@ export default function App() {
                         : "bg-neutral-900/60 text-neutral-400 hover:text-white hover:bg-neutral-900 border border-transparent"
                     }`}
                   >
-                    🏆 Overall Power (50-50 Weighted)
+                    🏆 Overall Power
                   </button>
                   <button
                     type="button"
