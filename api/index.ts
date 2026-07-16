@@ -342,6 +342,29 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
     return dbCache;
   }
 
+  // Always pre-load from the local JSON storage file as a reliable baseline
+  try {
+    if (fs.existsSync(dbFilePath)) {
+      const dataStr = fs.readFileSync(dbFilePath, "utf-8");
+      const parsed = JSON.parse(dataStr);
+      if (parsed && Array.isArray(parsed.students)) {
+        dbCache = {
+          ...dbCache,
+          ...parsed,
+          tests: parsed.tests || dbCache.tests || [],
+          students: parsed.students || dbCache.students || [],
+          scores: parsed.scores || dbCache.scores || [],
+          revisionSessions: parsed.revisionSessions || dbCache.revisionSessions || [],
+          examAttempts: parsed.examAttempts || dbCache.examAttempts || [],
+          revisionServices: parsed.revisionServices || dbCache.revisionServices || [],
+          revisionServiceLogs: parsed.revisionServiceLogs || dbCache.revisionServiceLogs || []
+        };
+      }
+    }
+  } catch (err) {
+    console.error("[DB] Failed to pre-load local file baseline:", err);
+  }
+
   // 1. SUPABASE SYNC (PRIORITIZED)
   const activeSupabase = getSupabase();
   if (activeSupabase) {
@@ -374,36 +397,116 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
       // Map results to camelCase structure
       const tests = (testsRes || []).map(r => mapRowKeys(r, "camel"));
       const students = (studentsRes || []).map(r => mapRowKeys(r, "camel"));
-      const scores = (scoresRes || []).map(r => mapRowKeys(r, "camel"));
+      const rawScores = (scoresRes || []).map(r => mapRowKeys(r, "camel"));
+      
+      // Separate normal scores from special placeholder revision rows
+      const scores = rawScores.filter(s => s.testId !== "t-999999999999999");
+      const specialRows = rawScores.filter(s => s.testId === "t-999999999999999");
+      
+      let parsedRevisionSessions: any[] = [];
+      let parsedExamAttempts: any[] = [];
+      let parsedRevisionServices: any[] = [];
+      let parsedRevisionServiceLogs: any[] = [];
+      
+      for (const row of specialRows) {
+        try {
+          const testName = row.testName || "";
+          if (testName.startsWith("REVISION_SESSION_JSON:")) {
+            const parsed = JSON.parse(testName.substring("REVISION_SESSION_JSON:".length));
+            parsedRevisionSessions.push(parsed);
+          } else if (testName.startsWith("EXAM_ATTEMPT_JSON:")) {
+            const parsed = JSON.parse(testName.substring("EXAM_ATTEMPT_JSON:".length));
+            parsedExamAttempts.push(parsed);
+          } else if (testName.startsWith("REVISION_SERVICE_JSON:")) {
+            const parsed = JSON.parse(testName.substring("REVISION_SERVICE_JSON:".length));
+            parsedRevisionServices.push(parsed);
+          } else if (testName.startsWith("REVISION_SERVICE_LOG_JSON:")) {
+            const parsed = JSON.parse(testName.substring("REVISION_SERVICE_LOG_JSON:".length));
+            parsedRevisionServiceLogs.push(parsed);
+          }
+        } catch (e) {
+          console.error("[DB] Failed to parse special scores row JSON:", e);
+        }
+      }
       
       let revisionSessions: any[] = [];
+      let revisionSessionsExist = false;
       try {
-        const { data: resSess } = await activeSupabase.from("revision_sessions").select("*");
-        if (resSess) {
+        const { data: resSess, error: errSess } = await activeSupabase.from("revision_sessions").select("*");
+        if (!errSess && resSess) {
+          revisionSessionsExist = true;
           revisionSessions = resSess.map(r => {
             const camel = mapRowKeys(r, "camel");
             return { ...camel, rag: camel.rag || "green" };
           });
+        } else if (errSess) {
+          console.warn("[DB] Supabase revision_sessions fetch failed (table may not exist):", errSess.message);
         }
-      } catch (_) {}
+      } catch (err: any) {
+        console.warn("[DB] Supabase revision_sessions error:", err.message);
+      }
+
+      const sessionsMap = new Map();
+      revisionSessions.forEach(s => sessionsMap.set(String(s.id), s));
+      parsedRevisionSessions.forEach(s => sessionsMap.set(String(s.id), s));
+      const combinedSessions = Array.from(sessionsMap.values());
 
       let examAttempts: any[] = [];
+      let examAttemptsExist = false;
       try {
-        const { data: resExam } = await activeSupabase.from("exam_attempts").select("*");
-        if (resExam) examAttempts = resExam.map(r => mapRowKeys(r, "camel"));
-      } catch (_) {}
+        const { data: resExam, error: errExam } = await activeSupabase.from("exam_attempts").select("*");
+        if (!errExam && resExam) {
+          examAttemptsExist = true;
+          examAttempts = resExam.map(r => mapRowKeys(r, "camel"));
+        } else if (errExam) {
+          console.warn("[DB] Supabase exam_attempts fetch failed (table may not exist):", errExam.message);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase exam_attempts error:", err.message);
+      }
+
+      const examMap = new Map();
+      examAttempts.forEach(e => examMap.set(String(e.id), e));
+      parsedExamAttempts.forEach(e => examMap.set(String(e.id), e));
+      const combinedExamAttempts = Array.from(examMap.values());
 
       let revisionServices: any[] = [];
+      let revisionServicesExist = false;
       try {
-        const { data: resServ } = await activeSupabase.from("revision_services").select("*");
-        if (resServ) revisionServices = resServ.map(r => mapRowKeys(r, "camel"));
-      } catch (_) {}
+        const { data: resServ, error: errServ } = await activeSupabase.from("revision_services").select("*");
+        if (!errServ && resServ) {
+          revisionServicesExist = true;
+          revisionServices = resServ.map(r => mapRowKeys(r, "camel"));
+        } else if (errServ) {
+          console.warn("[DB] Supabase revision_services fetch failed (table may not exist):", errServ.message);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase revision_services error:", err.message);
+      }
+
+      const servicesMap = new Map();
+      revisionServices.forEach(s => servicesMap.set(String(s.id), s));
+      parsedRevisionServices.forEach(s => servicesMap.set(String(s.id), s));
+      const combinedServices = Array.from(servicesMap.values());
 
       let revisionServiceLogs: any[] = [];
+      let revisionServiceLogsExist = false;
       try {
-        const { data: resLogs } = await activeSupabase.from("revision_service_logs").select("*");
-        if (resLogs) revisionServiceLogs = resLogs.map(r => mapRowKeys(r, "camel"));
-      } catch (_) {}
+        const { data: resLogs, error: errLogs } = await activeSupabase.from("revision_service_logs").select("*");
+        if (!errLogs && resLogs) {
+          revisionServiceLogsExist = true;
+          revisionServiceLogs = resLogs.map(r => mapRowKeys(r, "camel"));
+        } else if (errLogs) {
+          console.warn("[DB] Supabase revision_service_logs fetch failed (table may not exist):", errLogs.message);
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase revision_service_logs error:", err.message);
+      }
+
+      const logsMap = new Map();
+      revisionServiceLogs.forEach(l => logsMap.set(String(l.id), l));
+      parsedRevisionServiceLogs.forEach(l => logsMap.set(String(l.id), l));
+      const combinedServiceLogs = Array.from(logsMap.values());
       
       if (tests.length === 0 && students.length === 0 && scores.length === 0) {
         console.log("[DB] Supabase tables are empty. Auto-seeding Supabase with local/pre-bundled data...");
@@ -432,10 +535,10 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
           tests, 
           students, 
           scores,
-          revisionSessions: revisionSessions.length > 0 ? revisionSessions : (dbCache.revisionSessions || []),
-          examAttempts: examAttempts.length > 0 ? examAttempts : (dbCache.examAttempts || []),
-          revisionServices: revisionServices.length > 0 ? revisionServices : (dbCache.revisionServices || []),
-          revisionServiceLogs: revisionServiceLogs.length > 0 ? revisionServiceLogs : (dbCache.revisionServiceLogs || [])
+          revisionSessions: combinedSessions,
+          examAttempts: combinedExamAttempts,
+          revisionServices: combinedServices,
+          revisionServiceLogs: combinedServiceLogs
         };
       }
       
@@ -502,6 +605,92 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
   return dbCache;
 }
 
+function buildSpecialScoreRows(data: DBStructure): any[] {
+  const rows: any[] = [];
+  
+  if (data.revisionSessions) {
+    for (const item of data.revisionSessions) {
+      const student = data.students.find(s => s.username === item.studentUsername);
+      rows.push({
+        id: item.id,
+        studentUsername: item.studentUsername,
+        studentNickname: student?.nickname || item.studentUsername,
+        testId: "t-999999999999999",
+        testName: `REVISION_SESSION_JSON:${JSON.stringify(item)}`,
+        score: 0,
+        maxScore: 0,
+        percentage: 0,
+        grade: item.rag || "green",
+        date: item.date || new Date().toISOString().split("T")[0],
+        classGroup: student?.classGroup || "A",
+        academicYear: student?.academicYear || "26-27"
+      });
+    }
+  }
+  
+  if (data.examAttempts) {
+    for (const item of data.examAttempts) {
+      const student = data.students.find(s => s.username === item.studentUsername);
+      rows.push({
+        id: item.id,
+        studentUsername: item.studentUsername,
+        studentNickname: student?.nickname || item.studentUsername,
+        testId: "t-999999999999999",
+        testName: `EXAM_ATTEMPT_JSON:${JSON.stringify(item)}`,
+        score: item.marksScored || 0,
+        maxScore: item.marksAvailable || 0,
+        percentage: item.marksAvailable ? Math.round((item.marksScored / item.marksAvailable) * 100) : 0,
+        grade: "green",
+        date: item.date || new Date().toISOString().split("T")[0],
+        classGroup: student?.classGroup || "A",
+        academicYear: student?.academicYear || "26-27"
+      });
+    }
+  }
+  
+  if (data.revisionServices) {
+    for (const item of data.revisionServices) {
+      const student = data.students.find(s => s.username === item.studentUsername);
+      rows.push({
+        id: item.id,
+        studentUsername: item.studentUsername,
+        studentNickname: student?.nickname || item.studentUsername,
+        testId: "t-999999999999999",
+        testName: `REVISION_SERVICE_JSON:${JSON.stringify(item)}`,
+        score: 0,
+        maxScore: 0,
+        percentage: 0,
+        grade: "green",
+        date: new Date().toISOString().split("T")[0],
+        classGroup: student?.classGroup || "A",
+        academicYear: student?.academicYear || "26-27"
+      });
+    }
+  }
+  
+  if (data.revisionServiceLogs) {
+    for (const item of data.revisionServiceLogs) {
+      const student = data.students.find(s => s.username === item.studentUsername);
+      rows.push({
+        id: item.id,
+        studentUsername: item.studentUsername,
+        studentNickname: student?.nickname || item.studentUsername,
+        testId: "t-999999999999999",
+        testName: `REVISION_SERVICE_LOG_JSON:${JSON.stringify(item)}`,
+        score: item.duration || 0,
+        maxScore: 0,
+        percentage: 0,
+        grade: "green",
+        date: item.date || new Date().toISOString().split("T")[0],
+        classGroup: student?.classGroup || "A",
+        academicYear: student?.academicYear || "26-27"
+      });
+    }
+  }
+  
+  return rows;
+}
+
 // Database synchronizer
 async function saveDB(data: DBStructure): Promise<boolean> {
   // Update local memory cache instantly
@@ -518,24 +707,37 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       console.log("[DB] Synchronizing memory changes with Supabase...");
       
       // A. Sync tests
+      // Ensure the placeholder test template is present to satisfy FK constraints in Supabase
+      const placeholderTest = {
+        id: "t-999999999999999",
+        name: "__REVISION_TRACKER_PLACEHOLDER__",
+        maxScore: 0,
+        dateCreated: "2026-07-16"
+      };
+      
+      const testsToSync = [...data.tests];
+      if (!testsToSync.some(t => t.id === "t-999999999999999")) {
+        testsToSync.push(placeholderTest);
+      }
+      
       // Fetch all existing test IDs in Supabase to determine deleted ones
       const { data: existingTests, error: existingTestsErr } = await activeSupabase.from("tests").select("id");
       if (!existingTestsErr && existingTests) {
         const existingIds = existingTests.map((t: any) => String(t.id));
-        const currentIds = data.tests.map(t => String(t.id));
+        const currentIds = testsToSync.map(t => String(t.id));
         const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
         if (idsToDelete.length > 0) {
           await activeSupabase.from("tests").delete().in("id", idsToDelete);
         }
       }
       // Upsert current tests
-      if (data.tests.length > 0) {
-        let testsToSave = data.tests.map(t => mapRowKeys(t, dbColumnCasing.tests));
+      if (testsToSync.length > 0) {
+        let testsToSave = testsToSync.map(t => mapRowKeys(t, dbColumnCasing.tests));
         const { error: upsertErr } = await activeSupabase.from("tests").upsert(testsToSave);
         if (upsertErr) {
           const fallbackCasing = dbColumnCasing.tests === "snake" ? "camel" : "snake";
           console.warn(`[DB] Supabase tests upsert failed with ${dbColumnCasing.tests} casing. Retrying fallback ${fallbackCasing} casing...`);
-          testsToSave = data.tests.map(t => mapRowKeys(t, fallbackCasing));
+          testsToSave = testsToSync.map(t => mapRowKeys(t, fallbackCasing));
           const { error: retryErr } = await activeSupabase.from("tests").upsert(testsToSave);
           if (retryErr) {
             throw upsertErr;
@@ -572,24 +774,27 @@ async function saveDB(data: DBStructure): Promise<boolean> {
         }
       }
 
-      // C. Sync scores
+      // C. Sync scores (including special fallback revision rows)
+      const specialRows = buildSpecialScoreRows(data);
+      const allScoresToSave = [...data.scores, ...specialRows];
+      
       const { data: existingScores, error: existingScoresErr } = await activeSupabase.from("scores").select("id");
       if (!existingScoresErr && existingScores) {
         const existingIds = existingScores.map((s: any) => String(s.id));
-        const currentIds = data.scores.map(s => String(s.id));
+        const currentIds = allScoresToSave.map(s => String(s.id));
         const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
         if (idsToDelete.length > 0) {
           await activeSupabase.from("scores").delete().in("id", idsToDelete);
         }
       }
       // Upsert current scores
-      if (data.scores.length > 0) {
-        let scoresToSave = data.scores.map(s => mapRowKeys(s, dbColumnCasing.scores));
+      if (allScoresToSave.length > 0) {
+        let scoresToSave = allScoresToSave.map(s => mapRowKeys(s, dbColumnCasing.scores));
         const { error: upsertErr } = await activeSupabase.from("scores").upsert(scoresToSave);
         if (upsertErr) {
           const fallbackCasing = dbColumnCasing.scores === "snake" ? "camel" : "snake";
           console.warn(`[DB] Supabase scores upsert failed with ${dbColumnCasing.scores} casing. Retrying fallback ${fallbackCasing} casing...`);
-          scoresToSave = data.scores.map(s => mapRowKeys(s, fallbackCasing));
+          scoresToSave = allScoresToSave.map(s => mapRowKeys(s, fallbackCasing));
           const { error: retryErr } = await activeSupabase.from("scores").upsert(scoresToSave);
           if (retryErr) {
             throw upsertErr;
@@ -872,7 +1077,8 @@ app.post("/api/auth/change-password", async (req, res) => {
 app.get("/api/tests", async (req, res) => {
   try {
     const db = await loadDB(true);
-    res.json({ success: true, tests: db.tests });
+    const filteredTests = db.tests.filter(t => t.id !== "t-999999999999999");
+    res.json({ success: true, tests: filteredTests });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1276,13 +1482,15 @@ app.get("/api/scores", async (req, res) => {
     const { studentUsername } = req.query;
     const db = await loadDB(true);
 
+    const nonSpecialScores = db.scores.filter(s => s.testId !== "t-999999999999999");
+
     if (studentUsername) {
       // Return scores belonging to this specific student
-      const filtered = db.scores.filter(s => s.studentUsername === studentUsername);
+      const filtered = nonSpecialScores.filter(s => s.studentUsername === studentUsername);
       res.json({ success: true, scores: filtered });
     } else {
       // Return all scores for teacher module
-      res.json({ success: true, scores: db.scores });
+      res.json({ success: true, scores: nonSpecialScores });
     }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1317,9 +1525,9 @@ app.get("/api/teacher/dashboard", async (req, res) => {
 
     res.json({
       success: true,
-      tests: db.tests,
+      tests: db.tests.filter(t => t.id !== "t-999999999999999"),
       students: studentsList,
-      scores: db.scores,
+      scores: db.scores.filter(s => s.testId !== "t-999999999999999"),
       revisionSessions: db.revisionSessions || [],
       examAttempts: db.examAttempts || [],
       revisionServices: db.revisionServices || [],
