@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Cat,
@@ -115,6 +115,8 @@ export default function App() {
   );
   const [selectedTestId, setSelectedTestId] = useState<string>("");
   const [studentScoreRaw, setStudentScoreRaw] = useState<string>("");
+  const [assessmentSearch, setAssessmentSearch] = useState<string>("");
+  const [assessmentSortOrder, setAssessmentSortOrder] = useState<"date-desc" | "date-asc" | "grade-desc" | "grade-asc">("date-desc");
 
   // Student Revision tracker states
   const [studentTab, setStudentTab] = useState<"my-progress" | "wild-cat-arena" | "revision-progress">("my-progress");
@@ -2020,6 +2022,56 @@ export default function App() {
   // Internal state for sub-tabs on revision panel
   const [revSubTab, setRevSubTab] = useState<"log-sessions" | "exam-attempts">("log-sessions");
 
+  const loggedTestIds = useMemo(() => new Set(studentScores.map(sc => sc.testId)), [studentScores]);
+  const availableTests = useMemo(() => tests.filter(t => !loggedTestIds.has(t.id)), [tests, loggedTestIds]);
+
+  // Effect to sync and update selectedTestId based on remaining unlogged assessments
+  useEffect(() => {
+    if (currentUser?.role === "student") {
+      if (availableTests.length > 0) {
+        if (!selectedTestId || !availableTests.some(t => t.id === selectedTestId)) {
+          setSelectedTestId(availableTests[0].id);
+        }
+      } else {
+        if (selectedTestId !== "") {
+          setSelectedTestId("");
+        }
+      }
+    }
+  }, [availableTests, selectedTestId, currentUser]);
+
+  const getFilteredAndSortedStudentScores = () => {
+    let filtered = [...studentScores];
+    const query = assessmentSearch.trim().toLowerCase();
+    if (query) {
+      filtered = filtered.filter(score => {
+        const formattedDate = new Date(score.date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }).toLowerCase();
+        return (
+          score.testName.toLowerCase().includes(query) ||
+          score.grade.toLowerCase().includes(query) ||
+          score.score.toString().includes(query) ||
+          score.percentage.toString().includes(query) ||
+          formattedDate.includes(query)
+        );
+      });
+    }
+
+    filtered.sort((a, b) => {
+      if (assessmentSortOrder === "date-desc") {
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      } else if (assessmentSortOrder === "date-asc") {
+        return new Date(a.date).getTime() - new Date(b.date).getTime();
+      } else if (assessmentSortOrder === "grade-desc") {
+        return b.percentage - a.percentage;
+      } else if (assessmentSortOrder === "grade-asc") {
+        return a.percentage - b.percentage;
+      }
+      return 0;
+    });
+
+    return filtered;
+  };
+
   return (
     <div className="min-h-screen bg-[#050506] text-neutral-200 flex flex-col font-sans transition-all selection:bg-purple-600/30 selection:text-purple-300">
       
@@ -2405,7 +2457,7 @@ export default function App() {
                     <span>Log Assessment Score</span>
                   </h3>
 
-                  {tests.length > 0 ? (
+                  {availableTests.length > 0 ? (
                     <form onSubmit={handleScoreSubmission} className="space-y-4">
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-mono tracking-wider text-purple-400 uppercase font-bold">Assessment template</label>
@@ -2415,7 +2467,7 @@ export default function App() {
                           onChange={(e) => setSelectedTestId(e.target.value)}
                           className="w-full bg-[#030304] border border-purple-950/80 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-600 transition"
                         >
-                          {tests.map(t => (
+                          {availableTests.map(t => (
                             <option key={t.id} value={t.id}>
                               {t.name} (Max Marks: {t.maxScore})
                             </option>
@@ -2448,8 +2500,8 @@ export default function App() {
                             step="any"
                             required
                             min="0"
-                            max={tests.find(x => x.id === selectedTestId)?.maxScore}
-                            placeholder={tests.find(x => x.id === selectedTestId) ? `...... / ${tests.find(x => x.id === selectedTestId)?.maxScore} (out of max score)` : "...... / (out of max score)"}
+                            max={availableTests.find(x => x.id === selectedTestId)?.maxScore}
+                            placeholder={availableTests.find(x => x.id === selectedTestId) ? `...... / ${availableTests.find(x => x.id === selectedTestId)?.maxScore} (out of max score)` : "...... / (out of max score)"}
                             value={studentScoreRaw}
                             onChange={(e) => setStudentScoreRaw(e.target.value)}
                             className="w-full bg-[#030304] border border-purple-950/80 rounded-xl pl-10 pr-3 py-2 text-xs text-white focus:outline-none focus:border-purple-600 transition"
@@ -2458,10 +2510,10 @@ export default function App() {
                         {selectedTestId && studentScoreRaw && (
                           <div className="mt-2 text-[10px] bg-purple-950/30 rounded px-2.5 py-1.5 border border-purple-900/40 font-mono text-purple-300">
                              Calculation:{" "}
-                            {(parseFloat(studentScoreRaw) / (tests.find(x => x.id === selectedTestId)?.maxScore || 1) * 100).toFixed(1)}%{" "}
+                            {(parseFloat(studentScoreRaw) / (availableTests.find(x => x.id === selectedTestId)?.maxScore || 1) * 100).toFixed(1)}%{" "}
                              -{" "}
                             <span className="font-bold">
-                              Grade {determineGrade(parseFloat(((parseFloat(studentScoreRaw) / (tests.find(x => x.id === selectedTestId)?.maxScore || 1)) * 100).toFixed(2)))}
+                              Grade {determineGrade(parseFloat(((parseFloat(studentScoreRaw) / (availableTests.find(x => x.id === selectedTestId)?.maxScore || 1)) * 100).toFixed(2)))}
                             </span>
                           </div>
                         )}
@@ -2475,6 +2527,14 @@ export default function App() {
                         File Score Record
                       </button>
                     </form>
+                  ) : tests.length > 0 ? (
+                    <div className="text-center p-6 bg-[#030304] rounded-2xl border border-purple-950 text-neutral-400 text-xs">
+                      <div className="text-2xl mb-2">🎉</div>
+                      <p className="font-semibold text-white mb-1">Excellent Work!</p>
+                      <p className="text-neutral-500 text-[11px] leading-relaxed">
+                        All available assessments have been logged with a score. If you need to log again, retract an entry from the history ledger below.
+                      </p>
+                    </div>
                   ) : (
                     <div className="text-center p-4 bg-[#030304] rounded-2xl border border-purple-950 text-neutral-500 text-xs">
                       No assessment templates are loaded by the teacher yet. Reach out to the teacher console to establish assessment topics.
@@ -2486,66 +2546,109 @@ export default function App() {
             </div>
 
             {/* Assessment logs Table */}
-            <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl">
-              <h3 className="text-sm font-semibold text-neutral-400 flex items-center space-x-2 border-b border-purple-950/35 pb-4 mb-4">
-                <FileText className="w-4 h-4 text-purple-400" />
-                <span>Logged Assessments History</span>
-              </h3>
+            <div className="bg-neutral-950/70 border border-purple-950/80 rounded-3xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-purple-950/35 pb-4">
+                <h3 className="text-sm font-semibold text-neutral-400 flex items-center space-x-2">
+                  <FileText className="w-4 h-4 text-purple-400" />
+                  <span>Logged Assessments History</span>
+                </h3>
 
-              <div className="overflow-x-auto">
-                {studentScores.length > 0 ? (
-                  <table className="w-full text-left text-xs min-w-[600px]">
-                    <thead className="text-[10px] text-purple-400/80 uppercase tracking-widest border-b border-purple-950/50">
-                      <tr>
-                        <th className="py-3 px-4">Assess Date</th>
-                        <th className="py-3 px-4">Assessment Name</th>
-                        <th className="py-3 px-4 font-mono">My Secure Marks</th>
-                        <th className="py-3 px-4 font-mono text-center">Percentage</th>
-                        <th className="py-3 px-4 text-center">Grade Boundary</th>
-                        <th className="py-3 px-4 text-right">Retract</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-purple-950/30">
-                      {studentScores.map(score => {
-                        const gradeSticker = getGradeSticker(score.percentage);
-                        return (
-                          <tr key={score.id} className="hover:bg-purple-950/15 transition duration-150">
-                            <td className="py-3.5 px-4 text-neutral-300 font-medium">
-                              {new Date(score.date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
-                            </td>
-                            <td className="py-3.5 px-4 text-white font-semibold">{score.testName}</td>
-                            <td className="py-3.5 px-4 font-mono text-neutral-400">
-                              {score.score} <span className="text-[10px] text-neutral-600">/ {score.maxScore}</span>
-                            </td>
-                            <td className="py-3.5 px-4 font-mono font-semibold text-purple-300 text-center">
-                              {score.percentage}%
-                            </td>
-                            <td className="py-3.5 px-4 text-center">
-                              <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-bold tracking-brand uppercase border ${gradeSticker.color}`}>
-                                Grade {score.grade}
-                              </span>
-                            </td>
-                            <td className="py-3.5 px-4 text-right">
-                              <button
-                                id={`delete-score-${score.id}`}
-                                onClick={() => handleScoreDelete(score.id)}
-                                className="text-neutral-500 hover:text-red-400 transition ml-auto inline-block active:scale-95"
-                                title="Retract this score"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div className="text-center p-8 text-neutral-600">
-                    No assessments submitted in this academic session.
+                <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+                  {/* Sort Order Selector */}
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400 shrink-0">Order:</span>
+                    <select
+                      value={assessmentSortOrder}
+                      onChange={(e) => setAssessmentSortOrder(e.target.value as any)}
+                      className="bg-[#030304] border border-purple-950/80 rounded-xl px-2.5 py-1.5 text-xs text-white focus:border-purple-600 focus:outline-none cursor-pointer"
+                    >
+                      <option value="date-desc">📅 Date: Newest first</option>
+                      <option value="date-asc">📅 Date: Oldest first</option>
+                      <option value="grade-desc">🏆 Grade: Highest first</option>
+                      <option value="grade-asc">📈 Grade: Lowest first</option>
+                    </select>
                   </div>
-                )}
+
+                  {/* Keyword Filter Input */}
+                  <div className="relative max-w-xs w-full">
+                    <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-neutral-400" />
+                    <input
+                      type="text"
+                      placeholder="Search assessments..."
+                      value={assessmentSearch}
+                      onChange={(e) => setAssessmentSearch(e.target.value)}
+                      className="w-full bg-[#030304] border border-purple-950/80 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-neutral-500 focus:border-purple-600 focus:outline-none"
+                    />
+                  </div>
+                </div>
               </div>
+
+              {studentScores.length > 0 ? (
+                (() => {
+                  const sortedAndFiltered = getFilteredAndSortedStudentScores();
+                  if (sortedAndFiltered.length === 0) {
+                    return (
+                      <div className="text-center p-8 text-neutral-500 text-xs font-mono">
+                        No matches found for "{assessmentSearch}". Try adjusting your keywords.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="overflow-x-auto max-h-[380px] overflow-y-auto pr-2">
+                      <table className="w-full text-left text-xs min-w-[600px] relative">
+                        <thead className="text-[10px] text-purple-400/80 uppercase tracking-widest border-b border-purple-950/50 sticky top-0 bg-[#0e0a16] z-10">
+                          <tr>
+                            <th className="py-3 px-4 bg-[#0e0a16]">Assess Date</th>
+                            <th className="py-3 px-4 bg-[#0e0a16]">Assessment Name</th>
+                            <th className="py-3 px-4 font-mono bg-[#0e0a16]">My Secure Marks</th>
+                            <th className="py-3 px-4 font-mono text-center bg-[#0e0a16]">Percentage</th>
+                            <th className="py-3 px-4 text-center bg-[#0e0a16]">Grade Boundary</th>
+                            <th className="py-3 px-4 text-right bg-[#0e0a16]">Retract</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-950/30">
+                          {sortedAndFiltered.map(score => {
+                            const gradeSticker = getGradeSticker(score.percentage);
+                            return (
+                              <tr key={score.id} className="hover:bg-purple-950/15 transition duration-150">
+                                <td className="py-3.5 px-4 text-neutral-300 font-medium">
+                                  {new Date(score.date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
+                                </td>
+                                <td className="py-3.5 px-4 text-white font-semibold">{score.testName}</td>
+                                <td className="py-3.5 px-4 font-mono text-neutral-400">
+                                  {score.score} <span className="text-[10px] text-neutral-600">/ {score.maxScore}</span>
+                                </td>
+                                <td className="py-3.5 px-4 font-mono font-semibold text-purple-300 text-center">
+                                  {score.percentage}%
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-bold tracking-brand uppercase border ${gradeSticker.color}`}>
+                                    Grade {score.grade}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  <button
+                                    id={`delete-score-${score.id}`}
+                                    onClick={() => handleScoreDelete(score.id)}
+                                    className="text-neutral-500 hover:text-red-400 transition ml-auto inline-block active:scale-95 cursor-pointer"
+                                    title="Retract this score"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="text-center p-8 text-neutral-600">
+                  No assessments submitted in this academic session.
+                </div>
+              )}
             </div>
             </div>
             )}
