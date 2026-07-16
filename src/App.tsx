@@ -128,6 +128,7 @@ export default function App() {
   const [isTimerRunning, setIsTimerRunning] = useState<boolean>(false);
   const [cumulativeSearch, setCumulativeSearch] = useState<string>("");
   const [ragFilter, setRagFilter] = useState<"all" | "green" | "amber" | "red">("all");
+  const [logSortOrder, setLogSortOrder] = useState<"latest" | "oldest" | "longest" | "shortest">("latest");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [quickLogTopic, setQuickLogTopic] = useState<string>("");
   const [quickLogRag, setQuickLogRag] = useState<"red" | "amber" | "green">("green");
@@ -166,6 +167,7 @@ export default function App() {
   const [newServiceUrl, setNewServiceUrl] = useState<string>("");
   const [logServiceId, setLogServiceId] = useState<string>("");
   const [logServiceDuration, setLogServiceDuration] = useState<string>("");
+  const [logServiceRag, setLogServiceRag] = useState<"red" | "amber" | "green">("green");
 
   // Teacher dynamic inputs
   const [newTestName, setNewTestName] = useState<string>("");
@@ -1102,6 +1104,9 @@ export default function App() {
     const service = revisionServices.find(s => s.id === logServiceId);
     if (!service) return;
 
+    // Refresh database state first to prevent inconsistency
+    await syncApplicationData();
+
     try {
       const response = await fetch("/api/student/revision-services/log", {
         method: "POST",
@@ -1111,14 +1116,16 @@ export default function App() {
           serviceId: logServiceId,
           serviceName: service.name,
           duration: durationMin,
-          date: new Date().toISOString().split("T")[0]
+          date: new Date().toISOString().split("T")[0],
+          rag: logServiceRag
         })
       });
       const data = await response.json();
       if (response.ok && data.success) {
         showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
         setLogServiceDuration("");
-        syncApplicationData();
+        setLogServiceRag("green");
+        await syncApplicationData();
       } else {
         showNotification(data.error || "Failed to log service time.", "error");
       }
@@ -2583,22 +2590,39 @@ export default function App() {
                           <p className="text-[10px] text-neutral-400 mb-2">
                             Add study time for: <span className="font-bold text-white">{(revisionServices.find(s => s.id === logServiceId))?.name}</span>
                           </p>
-                          <form onSubmit={handleLogServiceDurationSubmit} className="flex gap-2">
-                            <input
-                              type="number"
-                              required
-                              min="1"
-                              max="1440"
-                              placeholder="Minutes (e.g., 45)"
-                              value={logServiceDuration}
-                              onChange={(e) => setLogServiceDuration(e.target.value)}
-                              className="w-full bg-[#030304] border rounded-lg px-3 py-1.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
-                            />
+                          <form onSubmit={handleLogServiceDurationSubmit} className="space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-mono tracking-wider uppercase font-bold text-neutral-400">Duration (mins)</label>
+                                <input
+                                  type="number"
+                                  required
+                                  min="1"
+                                  max="1440"
+                                  placeholder="Minutes (e.g., 45)"
+                                  value={logServiceDuration}
+                                  onChange={(e) => setLogServiceDuration(e.target.value)}
+                                  className="w-full bg-[#030304] border rounded-lg px-3 py-1.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[9px] font-mono tracking-wider uppercase font-bold text-neutral-400">RAG Rating</label>
+                                <select
+                                  value={logServiceRag}
+                                  onChange={(e) => setLogServiceRag(e.target.value as any)}
+                                  className="w-full bg-[#030304] border rounded-lg px-3 py-1.5 text-xs text-white border-purple-950/80 focus:border-purple-600 focus:outline-none cursor-pointer"
+                                >
+                                  <option value="green">🟢 Green (Strong)</option>
+                                  <option value="amber">🟡 Amber (Improving)</option>
+                                  <option value="red">🔴 Red (Needs Work)</option>
+                                </select>
+                              </div>
+                            </div>
                             <button
                               type="submit"
-                              className="bg-purple-700 hover:bg-purple-650 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
+                              className="w-full bg-purple-700 hover:bg-purple-650 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
                             >
-                              Log
+                              🚀 Log Study Session
                             </button>
                           </form>
                         </div>
@@ -2855,7 +2879,7 @@ export default function App() {
                       const rawLogs: Array<{
                         id: string;
                         originalId: string;
-                        type: "exam" | "topic";
+                        type: "exam" | "topic" | "external";
                         date: string;
                         title: string;
                         details: string;
@@ -2881,6 +2905,36 @@ export default function App() {
                         const topic = s.topic || "";
                         const comment = s.comment || (s as any).comment || "";
                         const dateVal = s.date || "";
+
+                        // Check if this is an external app log
+                        if (comment.includes("__EXTERNAL_APP__:")) {
+                          try {
+                            const parts = comment.split("__EXTERNAL_APP__:");
+                            const extAppName = parts[1] ? parts[1].trim() : "External App";
+                            rawLogs.push({
+                              id: `session-${s.id}`,
+                              originalId: s.id,
+                              type: "external" as const,
+                              date: dateVal,
+                              title: topic || `Study on ${extAppName}`,
+                              details: `Logged automatically via external app: ${extAppName}`,
+                              badge: rating.toUpperCase(),
+                              badgeColor: rating === "green" 
+                                ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+                                : rating === "amber" 
+                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                                : "bg-red-500/10 text-red-400 border border-red-500/20",
+                              meta: `${duration} mins`,
+                              rag: rating,
+                              fullTopic: topic,
+                              fullComment: comment,
+                              fullDuration: duration
+                            });
+                            continue;
+                          } catch (_) {
+                            // Fallback
+                          }
+                        }
 
                         // Check if this is an exam question logged inside revision sessions
                         if (comment.includes("__EXAM_METADATA__:")) {
@@ -2910,7 +2964,8 @@ export default function App() {
                               fullMarksScored: meta.marksScored,
                               fullMarksAvailable: meta.marksAvailable,
                               fullPercentage: normPercent,
-                              fullSelfScore: meta.selfMarkingScore || 0
+                              fullSelfScore: meta.selfMarkingScore || 0,
+                              fullDuration: duration
                             });
                             continue;
                           } catch (_) {
@@ -2952,6 +3007,7 @@ export default function App() {
                         const rating = e.rag || (marksAvailable > 0 && (marksScored / marksAvailable) >= 0.7 ? "green" : (marksScored / marksAvailable) >= 0.4 ? "amber" : "red");
 
                         const percentage = marksAvailable > 0 ? (marksScored / marksAvailable) * 100 : 0;
+                        const computedDuration = Math.max(1, Math.round(marksAvailable * 1.35));
 
                         rawLogs.push({
                           id: `exam-${e.id}`,
@@ -2974,7 +3030,8 @@ export default function App() {
                           fullMarksScored: marksScored,
                           fullMarksAvailable: marksAvailable,
                           fullPercentage: percentage,
-                          fullSelfScore: selfScore
+                          fullSelfScore: selfScore,
+                          fullDuration: computedDuration
                         });
                       }
 
@@ -2988,7 +3045,18 @@ export default function App() {
                           uniqueLogsMap.set(log.originalId, log);
                         }
                       }
-                      const cumulativeLogs = Array.from(uniqueLogsMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+                      const cumulativeLogs = Array.from(uniqueLogsMap.values());
+                      
+                      // Sort based on logSortOrder state
+                      if (logSortOrder === "latest") {
+                        cumulativeLogs.sort((a, b) => b.date.localeCompare(a.date));
+                      } else if (logSortOrder === "oldest") {
+                        cumulativeLogs.sort((a, b) => a.date.localeCompare(b.date));
+                      } else if (logSortOrder === "longest") {
+                        cumulativeLogs.sort((a, b) => (b.fullDuration || 0) - (a.fullDuration || 0));
+                      } else if (logSortOrder === "shortest") {
+                        cumulativeLogs.sort((a, b) => (a.fullDuration || 0) - (b.fullDuration || 0));
+                      }
 
                       const filteredCumulativeLogs = cumulativeLogs.filter(log => {
                         // 1. RAG Filter
@@ -3066,6 +3134,21 @@ export default function App() {
                                 </button>
                               </div>
 
+                              {/* Sort Order Selector */}
+                              <div className="flex items-center space-x-1.5">
+                                <span className="text-[10px] font-mono tracking-wider uppercase font-bold text-purple-400 shrink-0">Order:</span>
+                                <select
+                                  value={logSortOrder}
+                                  onChange={(e) => setLogSortOrder(e.target.value as any)}
+                                  className="bg-[#030304] border border-purple-950/80 rounded-xl px-2.5 py-1.5 text-xs text-white focus:border-purple-600 focus:outline-none cursor-pointer"
+                                >
+                                  <option value="latest">📅 Latest first</option>
+                                  <option value="oldest">📅 Oldest first</option>
+                                  <option value="longest">⏱️ Longest session</option>
+                                  <option value="shortest">⏱️ Shortest session</option>
+                                </select>
+                              </div>
+
                               {/* Keyword Filter Input */}
                               <div className="relative max-w-xs w-full">
                                 <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-neutral-400" />
@@ -3104,7 +3187,21 @@ export default function App() {
                                               </span>
                                               <span className="text-neutral-700">•</span>
                                             </>
-                                          ) : null}
+                                          ) : log.type === "external" ? (
+                                            <>
+                                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase bg-emerald-950 text-emerald-400 border border-emerald-900">
+                                                🌐 External Revision App
+                                              </span>
+                                              <span className="text-neutral-700">•</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase bg-purple-950 text-purple-400 border border-purple-900">
+                                                📖 Revision
+                                              </span>
+                                              <span className="text-neutral-700">•</span>
+                                            </>
+                                          )}
                                           <span className="text-xs font-semibold text-white">{log.title}</span>
                                         </div>
                                         
@@ -3116,7 +3213,7 @@ export default function App() {
 
                                         <div className="flex items-center space-x-3 text-[10px] text-neutral-500 font-mono pt-1">
                                           <span>Date: {log.date}</span>
-                                          {log.type === "topic" ? (
+                                          {log.type === "topic" || log.type === "external" ? (
                                             <>
                                               <span>•</span>
                                               <span>Duration: {log.meta}</span>
