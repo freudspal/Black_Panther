@@ -447,6 +447,15 @@ export default function App() {
       return;
     }
 
+    const testTemplate = teacherData.tests.find(t => t.id === manualTestId);
+    if (testTemplate) {
+      const rawVal = parseFloat(manualScoreRaw);
+      if (isNaN(rawVal) || rawVal < 0 || rawVal > testTemplate.maxScore) {
+        showNotification(`Score must be between 0 and the maximum marks limit of ${testTemplate.maxScore} for this assessment.`, "error");
+        return;
+      }
+    }
+
     try {
       showNotification("Logging score...", "info");
       const response = await fetch("/api/scores", {
@@ -2236,6 +2245,7 @@ export default function App() {
                             step="any"
                             required
                             min="0"
+                            max={tests.find(x => x.id === selectedTestId)?.maxScore}
                             placeholder={tests.find(x => x.id === selectedTestId) ? `...... / ${tests.find(x => x.id === selectedTestId)?.maxScore} (out of max score)` : "...... / (out of max score)"}
                             value={studentScoreRaw}
                             onChange={(e) => setStudentScoreRaw(e.target.value)}
@@ -4387,6 +4397,7 @@ export default function App() {
                               step="any"
                               required
                               min="0"
+                              max={teacherData.tests.find(x => x.id === manualTestId)?.maxScore}
                               placeholder={manualTestId ? `Secured score out of ${teacherData.tests.find(x => x.id === manualTestId)?.maxScore}` : "Enter secured score"}
                               value={manualScoreRaw}
                               onChange={(e) => setManualScoreRaw(e.target.value)}
