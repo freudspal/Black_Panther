@@ -631,7 +631,28 @@ export default function App() {
   // Trigger auto refresh when user state transitions
   useEffect(() => {
     if (currentUser) {
-      syncApplicationData();
+      if (currentUser.role === "student") {
+        // Instantly load cached revision data from localStorage to eliminate any UI delay/lag
+        try {
+          const cachedSessions = localStorage.getItem(`revision_sessions_${currentUser.username}`);
+          const cachedAttempts = localStorage.getItem(`exam_attempts_${currentUser.username}`);
+          const cachedServices = localStorage.getItem(`revision_services_${currentUser.username}`);
+          const cachedServiceLogs = localStorage.getItem(`revision_service_logs_${currentUser.username}`);
+
+          if (cachedSessions) setRevisionSessions(JSON.parse(cachedSessions));
+          if (cachedAttempts) setExamAttempts(JSON.parse(cachedAttempts));
+          if (cachedServices) setRevisionServices(JSON.parse(cachedServices));
+          if (cachedServiceLogs) setRevisionServiceLogs(JSON.parse(cachedServiceLogs));
+        } catch (e) {
+          console.error("Failed to restore revision cache from localStorage", e);
+        }
+
+        // Quietly perform background database sync without blocking the UI
+        syncApplicationData(true);
+      } else {
+        // Teacher panel does standard sync
+        syncApplicationData();
+      }
     }
   }, [currentUser]);
 
