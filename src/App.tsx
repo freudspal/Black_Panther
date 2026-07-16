@@ -560,10 +560,12 @@ export default function App() {
   }, [isTimerRunning, showLivenessCheck]);
 
   // Sync / Refresh helper
-  const syncApplicationData = async () => {
-    setIsRefreshing(true);
-    const databaseType = config.hasSupabase ? "Supabase database" : "local cache";
-    showNotification(`Syncing data with ${databaseType}...`, "info");
+  const syncApplicationData = async (quiet = false) => {
+    if (!quiet) {
+      setIsRefreshing(true);
+      const databaseType = config.hasSupabase ? "Supabase database" : "local cache";
+      showNotification(`Syncing data with ${databaseType}...`, "info");
+    }
     try {
       if (currentUser) {
         const timestamp = Date.now();
@@ -592,6 +594,16 @@ export default function App() {
             setExamAttempts(revisionData.examAttempts || []);
             setRevisionServices(revisionData.revisionServices || []);
             setRevisionServiceLogs(revisionData.revisionServiceLogs || []);
+
+            // Save to localStorage for offline cache & quiet loads
+            try {
+              localStorage.setItem(`revision_sessions_${currentUser.username}`, JSON.stringify(revisionData.revisionSessions || []));
+              localStorage.setItem(`exam_attempts_${currentUser.username}`, JSON.stringify(revisionData.examAttempts || []));
+              localStorage.setItem(`revision_services_${currentUser.username}`, JSON.stringify(revisionData.revisionServices || []));
+              localStorage.setItem(`revision_service_logs_${currentUser.username}`, JSON.stringify(revisionData.revisionServiceLogs || []));
+            } catch (e) {
+              console.error("localStorage persistence error in quiet sync", e);
+            }
           }
         } else if (currentUser.role === "teacher") {
           // Load teacher panel summary metrics
@@ -602,11 +614,17 @@ export default function App() {
           }
         }
       }
-      showNotification("Data synchronized successfully.", "success");
+      if (!quiet) {
+        showNotification("Data synchronized successfully.", "success");
+      }
     } catch (err) {
-      showNotification("Connection delay during sync. Retrying with local data.", "error");
+      if (!quiet) {
+        showNotification("Connection delay during sync. Retrying with local data.", "error");
+      }
     } finally {
-      setIsRefreshing(false);
+      if (!quiet) {
+        setIsRefreshing(false);
+      }
     }
   };
 
@@ -811,16 +829,35 @@ export default function App() {
     const savedRag = revRag;
     const savedDate = revDate;
 
-    // Check database state first to make sure UI is up-to-date
-    await syncApplicationData();
-
     // Instantly reset input fields
     setRevDuration("");
     setRevTopic("");
     setRevComment("");
 
+    // Optimistically update locally
+    const tempId = "session-" + Date.now() + Math.floor(Math.random() * 1000);
+    const newSession: RevisionSession = {
+      id: tempId,
+      studentUsername: currentUser.username,
+      date: savedDate,
+      duration: durationMin,
+      topic: savedTopic,
+      rag: savedRag,
+      comment: savedComment
+    };
+
+    setRevisionSessions(prev => {
+      const updated = [...prev, newSession];
+      try {
+        localStorage.setItem(`revision_sessions_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
+
     try {
-      const response = await fetch("/api/student/revision-session", {
+      fetch("/api/student/revision-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -831,25 +868,23 @@ export default function App() {
           rag: savedRag,
           comment: savedComment
         })
+      })
+      .then(async response => {
+        const data = await response.json();
+        if (response.ok && data.success) {
+          showNotification("Revision session logged successfully!", "success");
+          await syncApplicationData(true); // Quiet sync
+        } else {
+          showNotification(data.error || "Failed to log revision session to server.", "error");
+        }
+      })
+      .catch(() => {
+        showNotification("Network connection delay. Revision session saved locally.", "info");
+      })
+      .finally(() => {
+        setIsSavingTopicLog(false);
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        showNotification("Revision session logged successfully!", "success");
-        await syncApplicationData();
-      } else {
-        showNotification(data.error || "Failed to log revision session.", "error");
-        // Restore values if failed
-        setRevDuration(savedDuration);
-        setRevTopic(savedTopic);
-        setRevComment(savedComment);
-      }
     } catch (_) {
-      showNotification("Network error. Could not log session.", "error");
-      // Restore values if failed
-      setRevDuration(savedDuration);
-      setRevTopic(savedTopic);
-      setRevComment(savedComment);
-    } finally {
       setIsSavingTopicLog(false);
     }
   };
@@ -864,55 +899,105 @@ export default function App() {
     }
     const mins = Math.max(1, Math.round(timerSeconds / 60));
 
-    // Check database state first
-    await syncApplicationData();
+    const savedTopic = quickLogTopic;
+    const savedRag = quickLogRag;
+
+    // Instantly reset timer and form
+    setTimerSeconds(0);
+    setQuickLogTopic("");
+    setShowQuickLogForm(false);
+
+    // Optimistically update locally
+    const tempId = "session-" + Date.now() + Math.floor(Math.random() * 1000);
+    const newSession: RevisionSession = {
+      id: tempId,
+      studentUsername: currentUser.username,
+      date: new Date().toISOString().split("T")[0],
+      duration: mins,
+      topic: savedTopic,
+      rag: savedRag,
+      comment: "Logged automatically via live revision timer."
+    };
+
+    setRevisionSessions(prev => {
+      const updated = [...prev, newSession];
+      try {
+        localStorage.setItem(`revision_sessions_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
 
     try {
-      const response = await fetch("/api/student/revision-session", {
+      fetch("/api/student/revision-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentUsername: currentUser.username,
           date: new Date().toISOString().split("T")[0],
           duration: mins,
-          topic: quickLogTopic,
-          rag: quickLogRag,
+          topic: savedTopic,
+          rag: savedRag,
           comment: "Logged automatically via live revision timer."
         })
+      })
+      .then(async response => {
+        const data = await response.json();
+        if (response.ok && data.success) {
+          showNotification(`Logged ${mins} mins of revision on "${savedTopic}"!`, "success");
+          await syncApplicationData(true); // Quiet sync
+        } else {
+          showNotification(data.error || "Failed to save session to server.", "error");
+        }
+      })
+      .catch(() => {
+        showNotification("Network connection delay. Session saved locally.", "info");
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        showNotification(`Logged ${mins} mins of revision on "${quickLogTopic}"!`, "success");
-        setTimerSeconds(0);
-        setQuickLogTopic("");
-        setShowQuickLogForm(false);
-        await syncApplicationData();
-      } else {
-        showNotification(data.error || "Failed to save session.", "error");
-      }
-    } catch (_) {
-      showNotification("Network error. Could not save session.", "error");
-    }
+    } catch (_) {}
   };
 
   // Delete Revision Session
   const handleRevisionSessionDelete = async (id: string) => {
+    if (!currentUser) return;
     requestConfirm(
       "Purge Revision Session",
       "Are you sure you want to remove this logged revision session?",
       async () => {
+        // Optimistically remove locally
+        setRevisionSessions(prev => {
+          const filtered = prev.filter(s => s.id !== id);
+          try {
+            localStorage.setItem(`revision_sessions_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
+        // Also optimistically remove any matching exam attempt to keep them in sync
+        setExamAttempts(prev => {
+          const filtered = prev.filter(a => a.id !== id);
+          try {
+            localStorage.setItem(`exam_attempts_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
         try {
           const response = await fetch(`/api/student/revision-session/${id}`, {
             method: "DELETE"
           });
           if (response.ok) {
             showNotification("Revision session purged successfully.", "success");
-            syncApplicationData();
+            await syncApplicationData(true); // Quiet sync
           } else {
-            showNotification("Failed to purge session.", "error");
+            showNotification("Failed to purge session on server.", "error");
           }
         } catch (_) {
-          showNotification("Network error. Could not delete session.", "error");
+          showNotification("Network error. Removed locally.", "info");
         }
       }
     );
@@ -950,9 +1035,6 @@ export default function App() {
     const savedSelfMark = examSelfMark;
     const savedRag = examRag;
 
-    // Check database state first to make sure UI is up-to-date
-    await syncApplicationData();
-
     // Reset input fields instantly to prevent double logging
     setExamComponent("");
     setExamTopic("");
@@ -962,8 +1044,66 @@ export default function App() {
     setExamSelfMark("");
     setExamRag("green");
 
+    // Optimistically update locally
+    const tempId = "exam-" + Date.now() + Math.floor(Math.random() * 1000);
+    const computedDuration = Math.max(1, Math.round(marksAvail * 1.35));
+
+    const newAttempt: ExamAttempt = {
+      id: tempId,
+      studentUsername: currentUser.username,
+      component: savedComponent,
+      topic: savedTopic,
+      questionWording: savedWording,
+      marksAvailable: marksAvail,
+      marksScored: marksSc,
+      selfMarkingScore: selfM,
+      date: examDate,
+      rag: savedRag
+    };
+
+    const examMeta = {
+      component: savedComponent,
+      marksScored: marksSc,
+      marksAvailable: marksAvail,
+      selfMarkingScore: selfM,
+      topicArea: savedTopic,
+      rag: savedRag
+    };
+
+    const formattedComment = `Component: ${examMeta.component} | Score: ${examMeta.marksScored}/${examMeta.marksAvailable} | Self Assessed Score: ${examMeta.selfMarkingScore}/10 | Topic Area: ${examMeta.topicArea} __EXAM_METADATA__:${JSON.stringify(examMeta)}`;
+
+    const newSession: RevisionSession = {
+      id: tempId,
+      studentUsername: currentUser.username,
+      date: examDate,
+      duration: computedDuration,
+      topic: savedWording,
+      rag: savedRag,
+      comment: formattedComment
+    };
+
+    setExamAttempts(prev => {
+      const updated = [...prev, newAttempt];
+      try {
+        localStorage.setItem(`exam_attempts_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
+
+    setRevisionSessions(prev => {
+      const updated = [...prev, newSession];
+      try {
+        localStorage.setItem(`revision_sessions_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
+
     try {
-      const response = await fetch("/api/student/exam-attempt", {
+      fetch("/api/student/exam-attempt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -977,55 +1117,68 @@ export default function App() {
           date: examDate,
           rag: savedRag
         })
+      })
+      .then(async response => {
+        const data = await response.json();
+        if (response.ok && data.success) {
+          showNotification("Exam question attempt logged successfully!", "success");
+          await syncApplicationData(true); // Quiet sync
+        } else {
+          showNotification(data.error || "Failed to log exam attempt to server.", "error");
+        }
+      })
+      .catch(() => {
+        showNotification("Network connection delay. Exam attempt saved locally.", "info");
+      })
+      .finally(() => {
+        setIsSavingExamAttempt(false);
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        showNotification("Exam question attempt logged successfully!", "success");
-        await syncApplicationData();
-      } else {
-        showNotification(data.error || "Failed to log exam attempt.", "error");
-        // Restore values on failure
-        setExamComponent(savedComponent);
-        setExamTopic(savedTopic);
-        setExamWording(savedWording);
-        setExamMarksAvailable(savedMarksAvailable);
-        setExamMarksScored(savedMarksScored);
-        setExamSelfMark(savedSelfMark);
-        setExamRag(savedRag);
-      }
     } catch (_) {
-      showNotification("Network error. Could not log exam attempt.", "error");
-      // Restore values on failure
-      setExamComponent(savedComponent);
-      setExamTopic(savedTopic);
-      setExamWording(savedWording);
-      setExamMarksAvailable(savedMarksAvailable);
-      setExamMarksScored(savedMarksScored);
-      setExamSelfMark(savedSelfMark);
-      setExamRag(savedRag);
-    } finally {
       setIsSavingExamAttempt(false);
     }
   };
 
   // Delete Exam question attempt
   const handleExamAttemptDelete = async (id: string) => {
+    if (!currentUser) return;
     requestConfirm(
       "Purge Exam Attempt",
       "Are you sure you want to remove this logged exam attempt?",
       async () => {
+        // Optimistically remove locally
+        setExamAttempts(prev => {
+          const filtered = prev.filter(a => a.id !== id);
+          try {
+            localStorage.setItem(`exam_attempts_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
+        // Also optimistically remove the linked revision session to keep them in sync
+        setRevisionSessions(prev => {
+          const filtered = prev.filter(s => s.id !== id);
+          try {
+            localStorage.setItem(`revision_sessions_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
         try {
           const response = await fetch(`/api/student/exam-attempt/${id}`, {
             method: "DELETE"
           });
           if (response.ok) {
             showNotification("Exam attempt purged successfully.", "success");
-            syncApplicationData();
+            await syncApplicationData(true); // Quiet sync
           } else {
-            showNotification("Failed to purge attempt.", "error");
+            showNotification("Failed to purge attempt on server.", "error");
           }
         } catch (_) {
-          showNotification("Network error. Could not delete attempt.", "error");
+          showNotification("Network error. Removed locally.", "info");
         }
       }
     );
@@ -1040,48 +1193,97 @@ export default function App() {
       return;
     }
 
+    const savedName = newServiceName;
+    const savedUrl = newServiceUrl;
+
+    // Reset fields instantly
+    setNewServiceName("");
+    setNewServiceUrl("");
+
+    // Optimistically update locally
+    const tempId = "service-" + Date.now() + Math.floor(Math.random() * 1000);
+    const newService: RevisionService = {
+      id: tempId,
+      studentUsername: currentUser.username,
+      name: savedName,
+      url: savedUrl
+    };
+
+    setRevisionServices(prev => {
+      const updated = [...prev, newService];
+      try {
+        localStorage.setItem(`revision_services_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
+
     try {
-      const response = await fetch("/api/student/revision-service", {
+      fetch("/api/student/revision-service", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentUsername: currentUser.username,
-          name: newServiceName,
-          url: newServiceUrl
+          name: savedName,
+          url: savedUrl
         })
+      })
+      .then(async response => {
+        const data = await response.json();
+        if (response.ok && data.success) {
+          showNotification(`Revision service "${savedName}" registered!`, "success");
+          await syncApplicationData(true); // Quiet sync
+        } else {
+          showNotification(data.error || "Failed to register service on server.", "error");
+        }
+      })
+      .catch(() => {
+        showNotification("Network delay. Service registered locally.", "info");
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        showNotification(`Revision service "${newServiceName}" registered!`, "success");
-        setNewServiceName("");
-        setNewServiceUrl("");
-        syncApplicationData();
-      } else {
-        showNotification(data.error || "Failed to register service.", "error");
-      }
-    } catch (_) {
-      showNotification("Network error. Could not register service.", "error");
-    }
+    } catch (_) {}
   };
 
   // Delete Revision service
   const handleServiceDelete = async (id: string) => {
+    if (!currentUser) return;
     requestConfirm(
       "Remove Revision Service",
       "Are you sure you want to remove this service? All matching logged durations will be deleted.",
       async () => {
+        // Optimistically remove locally
+        setRevisionServices(prev => {
+          const filtered = prev.filter(s => s.id !== id);
+          try {
+            localStorage.setItem(`revision_services_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
+        setRevisionServiceLogs(prev => {
+          const filtered = prev.filter(l => l.serviceId !== id);
+          try {
+            localStorage.setItem(`revision_service_logs_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
         try {
           const response = await fetch(`/api/student/revision-service/${id}`, {
             method: "DELETE"
           });
           if (response.ok) {
             showNotification("Revision service deleted successfully.", "success");
-            syncApplicationData();
+            await syncApplicationData(true); // Quiet sync
           } else {
-            showNotification("Failed to delete service.", "error");
+            showNotification("Failed to delete service on server.", "error");
           }
         } catch (_) {
-          showNotification("Network error. Could not delete service.", "error");
+          showNotification("Network error. Removed locally.", "info");
         }
       }
     );
@@ -1104,34 +1306,84 @@ export default function App() {
     const service = revisionServices.find(s => s.id === logServiceId);
     if (!service) return;
 
-    // Refresh database state first to prevent inconsistency
-    await syncApplicationData();
+    const savedDuration = logServiceDuration;
+    const savedRag = logServiceRag;
+    const savedServiceId = logServiceId;
+
+    // Reset inputs instantly
+    setLogServiceDuration("");
+    setLogServiceRag("green");
+
+    // Optimistically update locally
+    const tempLogId = "rsl-" + Date.now() + Math.random().toString(36).substring(4, 7);
+    const tempSessionId = String(Date.now() + Math.floor(Math.random() * 1000));
+    const currentDate = new Date().toISOString().split("T")[0];
+
+    const newLog: RevisionServiceLog = {
+      id: tempLogId,
+      studentUsername: currentUser.username,
+      serviceId: savedServiceId,
+      serviceName: service.name,
+      duration: durationMin,
+      date: currentDate
+    };
+
+    const newSession: RevisionSession = {
+      id: tempSessionId,
+      studentUsername: currentUser.username,
+      date: currentDate,
+      duration: durationMin,
+      topic: `Study on ${service.name}`,
+      rag: savedRag,
+      comment: `Logged automatically via external app: ${service.name} __EXTERNAL_APP__:${service.name}`
+    };
+
+    setRevisionServiceLogs(prev => {
+      const updated = [...prev, newLog];
+      try {
+        localStorage.setItem(`revision_service_logs_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
+
+    setRevisionSessions(prev => {
+      const updated = [...prev, newSession];
+      try {
+        localStorage.setItem(`revision_sessions_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
 
     try {
-      const response = await fetch("/api/student/revision-services/log", {
+      fetch("/api/student/revision-services/log", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentUsername: currentUser.username,
-          serviceId: logServiceId,
+          serviceId: savedServiceId,
           serviceName: service.name,
           duration: durationMin,
-          date: new Date().toISOString().split("T")[0],
-          rag: logServiceRag
+          date: currentDate,
+          rag: savedRag
         })
+      })
+      .then(async response => {
+        const data = await response.json();
+        if (response.ok && data.success) {
+          showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
+          await syncApplicationData(true); // Quiet sync
+        } else {
+          showNotification(data.error || "Failed to log service time on server.", "error");
+        }
+      })
+      .catch(() => {
+        showNotification("Network delay. Logged locally.", "info");
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
-        setLogServiceDuration("");
-        setLogServiceRag("green");
-        await syncApplicationData();
-      } else {
-        showNotification(data.error || "Failed to log service time.", "error");
-      }
-    } catch (_) {
-      showNotification("Network error. Could not log service time.", "error");
-    }
+    } catch (_) {}
   };
 
   // Handle Score Deletion (Student side)

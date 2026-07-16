@@ -57,6 +57,7 @@ export interface ExamAttempt {
   marksScored: number;
   selfMarkingScore: number;
   date: string;
+  rag?: "red" | "amber" | "green";
 }
 
 export interface RevisionService {
