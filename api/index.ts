@@ -531,14 +531,62 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
         
         await saveDB(dbCache);
       } else {
+        // Safe Merge with local backup baseline to prevent data wiping
+        let localBackup: any = {};
+        try {
+          if (fs.existsSync(dbFilePath)) {
+            localBackup = JSON.parse(fs.readFileSync(dbFilePath, "utf-8"));
+          }
+        } catch (_) {}
+
+        const mergedSessionsMap = new Map();
+        if (localBackup && Array.isArray(localBackup.revisionSessions)) {
+          localBackup.revisionSessions.forEach((s: any) => {
+            if (s && s.id) mergedSessionsMap.set(String(s.id), s);
+          });
+        }
+        combinedSessions.forEach((s: any) => {
+          if (s && s.id) mergedSessionsMap.set(String(s.id), s);
+        });
+
+        const mergedExamAttemptsMap = new Map();
+        if (localBackup && Array.isArray(localBackup.examAttempts)) {
+          localBackup.examAttempts.forEach((e: any) => {
+            if (e && e.id) mergedExamAttemptsMap.set(String(e.id), e);
+          });
+        }
+        combinedExamAttempts.forEach((e: any) => {
+          if (e && e.id) mergedExamAttemptsMap.set(String(e.id), e);
+        });
+
+        const mergedServicesMap = new Map();
+        if (localBackup && Array.isArray(localBackup.revisionServices)) {
+          localBackup.revisionServices.forEach((s: any) => {
+            if (s && s.id) mergedServicesMap.set(String(s.id), s);
+          });
+        }
+        combinedServices.forEach((s: any) => {
+          if (s && s.id) mergedServicesMap.set(String(s.id), s);
+        });
+
+        const mergedServiceLogsMap = new Map();
+        if (localBackup && Array.isArray(localBackup.revisionServiceLogs)) {
+          localBackup.revisionServiceLogs.forEach((l: any) => {
+            if (l && l.id) mergedServiceLogsMap.set(String(l.id), l);
+          });
+        }
+        combinedServiceLogs.forEach((l: any) => {
+          if (l && l.id) mergedServiceLogsMap.set(String(l.id), l);
+        });
+
         dbCache = { 
           tests, 
           students, 
           scores,
-          revisionSessions: combinedSessions,
-          examAttempts: combinedExamAttempts,
-          revisionServices: combinedServices,
-          revisionServiceLogs: combinedServiceLogs
+          revisionSessions: Array.from(mergedSessionsMap.values()),
+          examAttempts: Array.from(mergedExamAttemptsMap.values()),
+          revisionServices: Array.from(mergedServicesMap.values()),
+          revisionServiceLogs: Array.from(mergedServiceLogsMap.values())
         };
       }
       
@@ -707,101 +755,116 @@ async function saveDB(data: DBStructure): Promise<boolean> {
       console.log("[DB] Synchronizing memory changes with Supabase...");
       
       // A. Sync tests
-      // Ensure the placeholder test template is present to satisfy FK constraints in Supabase
-      const placeholderTest = {
-        id: "t-999999999999999",
-        name: "__REVISION_TRACKER_PLACEHOLDER__",
-        maxScore: 0,
-        dateCreated: "2026-07-16"
-      };
-      
-      const testsToSync = [...data.tests];
-      if (!testsToSync.some(t => t.id === "t-999999999999999")) {
-        testsToSync.push(placeholderTest);
-      }
-      
-      // Fetch all existing test IDs in Supabase to determine deleted ones
-      const { data: existingTests, error: existingTestsErr } = await activeSupabase.from("tests").select("id");
-      if (!existingTestsErr && existingTests) {
-        const existingIds = existingTests.map((t: any) => String(t.id));
-        const currentIds = testsToSync.map(t => String(t.id));
-        const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
-        if (idsToDelete.length > 0) {
-          await activeSupabase.from("tests").delete().in("id", idsToDelete);
+      try {
+        // Ensure the placeholder test template is present to satisfy FK constraints in Supabase
+        const placeholderTest = {
+          id: "t-999999999999999",
+          name: "__REVISION_TRACKER_PLACEHOLDER__",
+          maxScore: 0,
+          dateCreated: "2026-07-16"
+        };
+        
+        const testsToSync = [...data.tests];
+        if (!testsToSync.some(t => t.id === "t-999999999999999")) {
+          testsToSync.push(placeholderTest);
         }
-      }
-      // Upsert current tests
-      if (testsToSync.length > 0) {
-        let testsToSave = testsToSync.map(t => mapRowKeys(t, dbColumnCasing.tests));
-        const { error: upsertErr } = await activeSupabase.from("tests").upsert(testsToSave);
-        if (upsertErr) {
-          const fallbackCasing = dbColumnCasing.tests === "snake" ? "camel" : "snake";
-          console.warn(`[DB] Supabase tests upsert failed with ${dbColumnCasing.tests} casing. Retrying fallback ${fallbackCasing} casing...`);
-          testsToSave = testsToSync.map(t => mapRowKeys(t, fallbackCasing));
-          const { error: retryErr } = await activeSupabase.from("tests").upsert(testsToSave);
-          if (retryErr) {
-            throw upsertErr;
-          } else {
-            dbColumnCasing.tests = fallbackCasing;
+        
+        // Fetch all existing test IDs in Supabase to determine deleted ones
+        const { data: existingTests, error: existingTestsErr } = await activeSupabase.from("tests").select("id");
+        if (!existingTestsErr && existingTests) {
+          const existingIds = existingTests.map((t: any) => String(t.id));
+          const currentIds = testsToSync.map(t => String(t.id));
+          const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
+          if (idsToDelete.length > 0) {
+            await activeSupabase.from("tests").delete().in("id", idsToDelete);
           }
         }
+        // Upsert current tests
+        if (testsToSync.length > 0) {
+          let testsToSave = testsToSync.map(t => mapRowKeys(t, dbColumnCasing.tests));
+          const { error: upsertErr } = await activeSupabase.from("tests").upsert(testsToSave);
+          if (upsertErr) {
+            const fallbackCasing = dbColumnCasing.tests === "snake" ? "camel" : "snake";
+            console.warn(`[DB] Supabase tests upsert failed with ${dbColumnCasing.tests} casing. Retrying fallback ${fallbackCasing} casing...`);
+            testsToSave = testsToSync.map(t => mapRowKeys(t, fallbackCasing));
+            const { error: retryErr } = await activeSupabase.from("tests").upsert(testsToSave);
+            if (retryErr) {
+              throw upsertErr;
+            } else {
+              dbColumnCasing.tests = fallbackCasing;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase tests sync skipped/failed:", err.message || err);
+        synced = false;
       }
 
       // B. Sync students
-      const { data: existingStudents, error: existingStudentsErr } = await activeSupabase.from("students").select("username");
-      if (!existingStudentsErr && existingStudents) {
-        const existingUsernames = existingStudents.map((s: any) => String(s.username).toLowerCase());
-        const currentUsernames = data.students.map(s => String(s.username).toLowerCase());
-        const usernamesToDelete = existingUsernames.filter(u => !currentUsernames.includes(u));
-        if (usernamesToDelete.length > 0) {
-          await activeSupabase.from("students").delete().in("username", usernamesToDelete);
-        }
-      }
-      // Upsert current students
-      if (data.students.length > 0) {
-        let studentsToSave = data.students.map(s => mapRowKeys(s, dbColumnCasing.students));
-        const { error: upsertErr } = await activeSupabase.from("students").upsert(studentsToSave);
-        if (upsertErr) {
-          const fallbackCasing = dbColumnCasing.students === "snake" ? "camel" : "snake";
-          console.warn(`[DB] Supabase students upsert failed with ${dbColumnCasing.students} casing. Retrying fallback ${fallbackCasing} casing...`);
-          studentsToSave = data.students.map(s => mapRowKeys(s, fallbackCasing));
-          const { error: retryErr } = await activeSupabase.from("students").upsert(studentsToSave);
-          if (retryErr) {
-            throw upsertErr;
-          } else {
-            dbColumnCasing.students = fallbackCasing;
+      try {
+        const { data: existingStudents, error: existingStudentsErr } = await activeSupabase.from("students").select("username");
+        if (!existingStudentsErr && existingStudents) {
+          const existingUsernames = existingStudents.map((s: any) => String(s.username).toLowerCase());
+          const currentUsernames = data.students.map(s => String(s.username).toLowerCase());
+          const usernamesToDelete = existingUsernames.filter(u => !currentUsernames.includes(u));
+          if (usernamesToDelete.length > 0) {
+            await activeSupabase.from("students").delete().in("username", usernamesToDelete);
           }
         }
+        // Upsert current students
+        if (data.students.length > 0) {
+          let studentsToSave = data.students.map(s => mapRowKeys(s, dbColumnCasing.students));
+          const { error: upsertErr } = await activeSupabase.from("students").upsert(studentsToSave);
+          if (upsertErr) {
+            const fallbackCasing = dbColumnCasing.students === "snake" ? "camel" : "snake";
+            console.warn(`[DB] Supabase students upsert failed with ${dbColumnCasing.students} casing. Retrying fallback ${fallbackCasing} casing...`);
+            studentsToSave = data.students.map(s => mapRowKeys(s, fallbackCasing));
+            const { error: retryErr } = await activeSupabase.from("students").upsert(studentsToSave);
+            if (retryErr) {
+              throw upsertErr;
+            } else {
+              dbColumnCasing.students = fallbackCasing;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase students sync skipped/failed:", err.message || err);
+        synced = false;
       }
 
       // C. Sync scores (including special fallback revision rows)
-      const specialRows = buildSpecialScoreRows(data);
-      const allScoresToSave = [...data.scores, ...specialRows];
-      
-      const { data: existingScores, error: existingScoresErr } = await activeSupabase.from("scores").select("id");
-      if (!existingScoresErr && existingScores) {
-        const existingIds = existingScores.map((s: any) => String(s.id));
-        const currentIds = allScoresToSave.map(s => String(s.id));
-        const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
-        if (idsToDelete.length > 0) {
-          await activeSupabase.from("scores").delete().in("id", idsToDelete);
-        }
-      }
-      // Upsert current scores
-      if (allScoresToSave.length > 0) {
-        let scoresToSave = allScoresToSave.map(s => mapRowKeys(s, dbColumnCasing.scores));
-        const { error: upsertErr } = await activeSupabase.from("scores").upsert(scoresToSave);
-        if (upsertErr) {
-          const fallbackCasing = dbColumnCasing.scores === "snake" ? "camel" : "snake";
-          console.warn(`[DB] Supabase scores upsert failed with ${dbColumnCasing.scores} casing. Retrying fallback ${fallbackCasing} casing...`);
-          scoresToSave = allScoresToSave.map(s => mapRowKeys(s, fallbackCasing));
-          const { error: retryErr } = await activeSupabase.from("scores").upsert(scoresToSave);
-          if (retryErr) {
-            throw upsertErr;
-          } else {
-            dbColumnCasing.scores = fallbackCasing;
+      try {
+        const specialRows = buildSpecialScoreRows(data);
+        const allScoresToSave = [...data.scores, ...specialRows];
+        
+        const { data: existingScores, error: existingScoresErr } = await activeSupabase.from("scores").select("id");
+        if (!existingScoresErr && existingScores) {
+          const existingIds = existingScores.map((s: any) => String(s.id));
+          const currentIds = allScoresToSave.map(s => String(s.id));
+          const idsToDelete = existingIds.filter(id => !currentIds.includes(id));
+          if (idsToDelete.length > 0) {
+            await activeSupabase.from("scores").delete().in("id", idsToDelete);
           }
         }
+        // Upsert current scores
+        if (allScoresToSave.length > 0) {
+          let scoresToSave = allScoresToSave.map(s => mapRowKeys(s, dbColumnCasing.scores));
+          const { error: upsertErr } = await activeSupabase.from("scores").upsert(scoresToSave);
+          if (upsertErr) {
+            const fallbackCasing = dbColumnCasing.scores === "snake" ? "camel" : "snake";
+            console.warn(`[DB] Supabase scores upsert failed with ${dbColumnCasing.scores} casing. Retrying fallback ${fallbackCasing} casing...`);
+            scoresToSave = allScoresToSave.map(s => mapRowKeys(s, fallbackCasing));
+            const { error: retryErr } = await activeSupabase.from("scores").upsert(scoresToSave);
+            if (retryErr) {
+              throw upsertErr;
+            } else {
+              dbColumnCasing.scores = fallbackCasing;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn("[DB] Supabase scores sync skipped/failed:", err.message || err);
+        synced = false;
       }
 
       // D. Sync revisionSessions (Optional / Safe)
