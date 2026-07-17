@@ -708,11 +708,13 @@ export default function App() {
           let localScores: any[] = [];
           let localSessions: any[] = [];
           let localAttempts: any[] = [];
+          let localServiceLogs: any[] = [];
 
           try {
             localScores = JSON.parse(localStorage.getItem(`scores_${currentUser.username}`) || "[]");
             localSessions = JSON.parse(localStorage.getItem(`revision_sessions_${currentUser.username}`) || "[]");
             localAttempts = JSON.parse(localStorage.getItem(`exam_attempts_${currentUser.username}`) || "[]");
+            localServiceLogs = JSON.parse(localStorage.getItem(`revision_service_logs_${currentUser.username}`) || "[]");
           } catch (_) {}
 
           // 1. Sync Scores / Assignments
@@ -780,11 +782,29 @@ export default function App() {
               quiet
             );
 
-            setRevisionServiceLogs(revisionData.revisionServiceLogs || []);
+            let finalServiceLogs = localServiceLogs;
+            finalServiceLogs = await syncLocalAndCloudData(
+              `revision_service_logs_${currentUser.username}`,
+              localServiceLogs,
+              revisionData.revisionServiceLogs || [],
+              "/api/student/revision-services/log",
+              (item) => ({
+                id: item.id,
+                sessionId: item.sessionId || String(Date.now() + Math.floor(Math.random() * 1000000)),
+                studentUsername: currentUser.username,
+                serviceId: item.serviceId,
+                serviceName: item.serviceName,
+                duration: item.duration,
+                date: item.date,
+                updatedAt: item.updatedAt
+              }),
+              quiet
+            );
+
+            setRevisionServiceLogs(finalServiceLogs);
             setRevisionServices(revisionData.revisionServices || []);
             try {
               localStorage.setItem(`revision_services_${currentUser.username}`, JSON.stringify(revisionData.revisionServices || []));
-              localStorage.setItem(`revision_service_logs_${currentUser.username}`, JSON.stringify(revisionData.revisionServiceLogs || []));
             } catch (_) {}
           }
 
@@ -1007,7 +1027,7 @@ export default function App() {
       studentUsername: currentUser.username,
       studentNickname: currentUser.nickname || currentUser.username,
       testId: selectedTestId,
-      testName: testTemplate.testName,
+      testName: testTemplate.name,
       maxScore: testTemplate.maxScore,
       score: rawVal,
       percentage: pct,
@@ -1658,18 +1678,17 @@ export default function App() {
       })
       .then(async response => {
         const data = await response.json();
+        setIsLoggingService(false); // Snappy UI: turn off loading indicator immediately!
         if (response.ok && data.success) {
           showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
-          await syncApplicationData(true); // Quiet sync
+          syncApplicationData(true); // Run quiet sync in the background without blocking
         } else {
           showNotification(data.error || "Failed to log service time on server.", "error");
         }
       })
       .catch(() => {
-        showNotification("Network delay. Logged locally.", "info");
-      })
-      .finally(() => {
         setIsLoggingService(false);
+        showNotification("Network delay. Logged locally.", "info");
       });
     } catch (_) {
       setIsLoggingService(false);
@@ -3870,6 +3889,7 @@ export default function App() {
                         fullSelfScore?: number;
                         fullComment?: string;
                         fullDuration?: number;
+                        updatedAt?: string;
                       }> = [];
 
                       // Process revision sessions
@@ -3902,7 +3922,8 @@ export default function App() {
                               rag: rating,
                               fullTopic: topic,
                               fullComment: comment,
-                              fullDuration: duration
+                              fullDuration: duration,
+                              updatedAt: s.updatedAt
                             });
                             continue;
                           } catch (_) {
@@ -3939,7 +3960,8 @@ export default function App() {
                               fullMarksAvailable: meta.marksAvailable,
                               fullPercentage: normPercent,
                               fullSelfScore: meta.selfMarkingScore || 0,
-                              fullDuration: duration
+                              fullDuration: duration,
+                              updatedAt: s.updatedAt
                             });
                             continue;
                           } catch (_) {
@@ -3965,7 +3987,8 @@ export default function App() {
                           rag: rating,
                           fullTopic: topic,
                           fullComment: comment,
-                          fullDuration: duration
+                          fullDuration: duration,
+                          updatedAt: s.updatedAt
                         });
                       }
 
@@ -4005,7 +4028,8 @@ export default function App() {
                           fullMarksAvailable: marksAvailable,
                           fullPercentage: percentage,
                           fullSelfScore: selfScore,
-                          fullDuration: computedDuration
+                          fullDuration: computedDuration,
+                          updatedAt: e.updatedAt
                         });
                       }
 
@@ -4023,9 +4047,19 @@ export default function App() {
                       
                       // Sort based on logSortOrder state
                       if (logSortOrder === "latest") {
-                        cumulativeLogs.sort((a, b) => b.date.localeCompare(a.date));
+                        cumulativeLogs.sort((a, b) => {
+                          const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : new Date(a.date).getTime();
+                          const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : new Date(b.date).getTime();
+                          if (timeA !== timeB) return timeB - timeA;
+                          return b.date.localeCompare(a.date);
+                        });
                       } else if (logSortOrder === "oldest") {
-                        cumulativeLogs.sort((a, b) => a.date.localeCompare(b.date));
+                        cumulativeLogs.sort((a, b) => {
+                          const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : new Date(a.date).getTime();
+                          const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : new Date(b.date).getTime();
+                          if (timeA !== timeB) return timeA - timeB;
+                          return a.date.localeCompare(b.date);
+                        });
                       } else if (logSortOrder === "longest") {
                         cumulativeLogs.sort((a, b) => (b.fullDuration || 0) - (a.fullDuration || 0));
                       } else if (logSortOrder === "shortest") {
@@ -4186,7 +4220,19 @@ export default function App() {
                                         )}
 
                                         <div className="flex items-center space-x-3 text-[10px] text-neutral-500 font-mono pt-1">
-                                          <span>Date: {log.date}</span>
+                                          <span>
+                                            Date: {log.date}
+                                            {(() => {
+                                              if (log.updatedAt) {
+                                                try {
+                                                  const d = new Date(log.updatedAt);
+                                                  const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                                  return ` @ ${timeStr}`;
+                                                } catch (_) {}
+                                              }
+                                              return "";
+                                            })()}
+                                          </span>
                                           {log.type === "topic" || log.type === "external" ? (
                                             <>
                                               <span>•</span>
