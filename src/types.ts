@@ -25,6 +25,7 @@ export interface ScoreEntry {
   date: string;
   classGroup: string;
   academicYear: string;
+  updatedAt?: string;
 }
 
 export interface TeacherDashboardMetrics {
@@ -45,6 +46,7 @@ export interface RevisionSession {
   topic: string;
   rag: "red" | "amber" | "green";
   comment: string;
+  updatedAt?: string;
 }
 
 export interface ExamAttempt {
@@ -58,6 +60,7 @@ export interface ExamAttempt {
   selfMarkingScore: number;
   date: string;
   rag?: "red" | "amber" | "green";
+  updatedAt?: string;
 }
 
 export interface RevisionService {
@@ -65,6 +68,7 @@ export interface RevisionService {
   studentUsername: string;
   name: string;
   url: string;
+  updatedAt?: string;
 }
 
 export interface RevisionServiceLog {
@@ -74,4 +78,5 @@ export interface RevisionServiceLog {
   serviceName: string;
   duration: number;
   date: string;
+  updatedAt?: string;
 }

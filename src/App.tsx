@@ -139,7 +139,13 @@ export default function App() {
   const [showQuickLogForm, setShowQuickLogForm] = useState<boolean>(false);
   const [isSavingTopicLog, setIsSavingTopicLog] = useState<boolean>(false);
   const [isSavingExamAttempt, setIsSavingExamAttempt] = useState<boolean>(false);
+  const [isLoggingService, setIsLoggingService] = useState<boolean>(false);
   const [showLivenessCheck, setShowLivenessCheck] = useState<boolean>(false);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
+  const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
+  const [isSavingScore, setIsSavingScore] = useState<boolean>(false);
+  const [processingDeletions, setProcessingDeletions] = useState<Record<string, boolean>>({});
+  const [isRegisteringShortcut, setIsRegisteringShortcut] = useState<boolean>(false);
 
   // Refs for background-accurate stopwatch timing and liveness check interval
   const timerStartTimeRef = useRef<number | null>(null);
@@ -572,6 +578,104 @@ export default function App() {
     };
   }, [isTimerRunning, showLivenessCheck]);
 
+  // Helper to generate a unique 9-digit code ID (as a string containing only digits)
+  const generate9DigitId = (): string => {
+    return Math.floor(100000000 + Math.random() * 900000000).toString();
+  };
+
+  const syncLocalAndCloudData = async (
+    key: string,
+    localItems: any[],
+    cloudItems: any[],
+    postEndpoint: string,
+    payloadMapper: (item: any) => any,
+    quiet = true
+  ): Promise<any[]> => {
+    const localMap = new Map<string, any>();
+    localItems.forEach(item => {
+      if (item && item.id) {
+        localMap.set(String(item.id), item);
+      }
+    });
+
+    const mergedList: any[] = [];
+    const itemsToUpload: any[] = [];
+    const cloudProcessedIds = new Set<string>();
+
+    for (const cloudItem of cloudItems) {
+      if (!cloudItem || !cloudItem.id) continue;
+      const idStr = String(cloudItem.id);
+      cloudProcessedIds.add(idStr);
+
+      const localItem = localMap.get(idStr);
+      if (localItem) {
+        // Both exist. Compare updatedAt or date
+        const localTime = new Date(localItem.updatedAt || localItem.date || 0).getTime();
+        const cloudTime = new Date(cloudItem.updatedAt || cloudItem.date || 0).getTime();
+
+        if (localTime > cloudTime) {
+          // Local is newer -> preserve local and upload it
+          mergedList.push(localItem);
+          itemsToUpload.push(localItem);
+        } else {
+          // Cloud is newer or equal -> preserve cloud, ensure it's stamped
+          const stampedCloud = {
+            ...cloudItem,
+            updatedAt: cloudItem.updatedAt || new Date().toISOString()
+          };
+          mergedList.push(stampedCloud);
+        }
+      } else {
+        // Exists in cloud only
+        const stampedCloud = {
+          ...cloudItem,
+          updatedAt: cloudItem.updatedAt || new Date().toISOString()
+        };
+        mergedList.push(stampedCloud);
+      }
+    }
+
+    // Add remaining local items (not in cloud list)
+    for (const localItem of localItems) {
+      if (!localItem || !localItem.id) continue;
+      const idStr = String(localItem.id);
+      if (!cloudProcessedIds.has(idStr)) {
+        // Exists in local only -> upload it
+        const stampedLocal = {
+          ...localItem,
+          updatedAt: localItem.updatedAt || new Date().toISOString()
+        };
+        mergedList.push(stampedLocal);
+        itemsToUpload.push(stampedLocal);
+      }
+    }
+
+    // Save final merged list to localStorage
+    try {
+      localStorage.setItem(key, JSON.stringify(mergedList));
+    } catch (e) {
+      console.error(`Failed to save local storage cache for ${key}`, e);
+    }
+
+    // Quietly upload new or modified items to cloud
+    if (itemsToUpload.length > 0) {
+      for (const item of itemsToUpload) {
+        try {
+          const payload = payloadMapper(item);
+          await fetch(postEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        } catch (err) {
+          console.error(`Failed quiet upload of item ${item.id} to ${postEndpoint}`, err);
+        }
+      }
+    }
+
+    return mergedList;
+  };
+
   // Sync / Refresh helper
   const syncApplicationData = async (quiet = false) => {
     if (!quiet) {
@@ -599,25 +703,94 @@ export default function App() {
               setSelectedTestId(testsData.tests[0].id);
             }
           }
-          if (scoresData.success) {
-            setStudentScores(scoresData.scores);
-          }
-          if (revisionData.success) {
-            setRevisionSessions(revisionData.revisionSessions || []);
-            setExamAttempts(revisionData.examAttempts || []);
-            setRevisionServices(revisionData.revisionServices || []);
-            setRevisionServiceLogs(revisionData.revisionServiceLogs || []);
 
-            // Save to localStorage for offline cache & quiet loads
+          // Get local caches from localStorage
+          let localScores: any[] = [];
+          let localSessions: any[] = [];
+          let localAttempts: any[] = [];
+
+          try {
+            localScores = JSON.parse(localStorage.getItem(`scores_${currentUser.username}`) || "[]");
+            localSessions = JSON.parse(localStorage.getItem(`revision_sessions_${currentUser.username}`) || "[]");
+            localAttempts = JSON.parse(localStorage.getItem(`exam_attempts_${currentUser.username}`) || "[]");
+          } catch (_) {}
+
+          // 1. Sync Scores / Assignments
+          let finalScores = localScores;
+          if (scoresData.success) {
+            finalScores = await syncLocalAndCloudData(
+              `scores_${currentUser.username}`,
+              localScores,
+              scoresData.scores || [],
+              "/api/scores",
+              (item) => ({
+                id: item.id,
+                studentUsername: currentUser.username,
+                testId: item.testId,
+                score: item.score,
+                date: item.date,
+                updatedAt: item.updatedAt
+              }),
+              quiet
+            );
+          }
+          setStudentScores(finalScores);
+
+          // 2. Sync Revision Sessions & Exam Attempts
+          let finalSessions = localSessions;
+          let finalAttempts = localAttempts;
+
+          if (revisionData.success) {
+            finalSessions = await syncLocalAndCloudData(
+              `revision_sessions_${currentUser.username}`,
+              localSessions,
+              revisionData.revisionSessions || [],
+              "/api/student/revision-session",
+              (item) => ({
+                id: item.id,
+                studentUsername: currentUser.username,
+                date: item.date,
+                duration: item.duration,
+                topic: item.topic,
+                rag: item.rag,
+                comment: item.comment,
+                updatedAt: item.updatedAt
+              }),
+              quiet
+            );
+
+            finalAttempts = await syncLocalAndCloudData(
+              `exam_attempts_${currentUser.username}`,
+              localAttempts,
+              revisionData.examAttempts || [],
+              "/api/student/exam-attempt",
+              (item) => ({
+                id: item.id,
+                studentUsername: currentUser.username,
+                component: item.component,
+                topic: item.topic,
+                questionWording: item.questionWording,
+                marksAvailable: item.marksAvailable,
+                marksScored: item.marksScored,
+                selfMarkingScore: item.selfMarkingScore,
+                date: item.date,
+                rag: item.rag,
+                updatedAt: item.updatedAt
+              }),
+              quiet
+            );
+
+            setRevisionServiceLogs(revisionData.revisionServiceLogs || []);
+            setRevisionServices(revisionData.revisionServices || []);
             try {
-              localStorage.setItem(`revision_sessions_${currentUser.username}`, JSON.stringify(revisionData.revisionSessions || []));
-              localStorage.setItem(`exam_attempts_${currentUser.username}`, JSON.stringify(revisionData.examAttempts || []));
               localStorage.setItem(`revision_services_${currentUser.username}`, JSON.stringify(revisionData.revisionServices || []));
               localStorage.setItem(`revision_service_logs_${currentUser.username}`, JSON.stringify(revisionData.revisionServiceLogs || []));
-            } catch (e) {
-              console.error("localStorage persistence error in quiet sync", e);
-            }
+            } catch (_) {}
           }
+
+          setRevisionSessions(finalSessions);
+          setExamAttempts(finalAttempts);
+
         } else if (currentUser.role === "teacher") {
           // Load teacher panel summary metrics
           const res = await fetch(`/api/teacher/dashboard?t=${timestamp}`);
@@ -647,11 +820,13 @@ export default function App() {
       if (currentUser.role === "student") {
         // Instantly load cached revision data from localStorage to eliminate any UI delay/lag
         try {
+          const cachedScores = localStorage.getItem(`scores_${currentUser.username}`);
           const cachedSessions = localStorage.getItem(`revision_sessions_${currentUser.username}`);
           const cachedAttempts = localStorage.getItem(`exam_attempts_${currentUser.username}`);
           const cachedServices = localStorage.getItem(`revision_services_${currentUser.username}`);
           const cachedServiceLogs = localStorage.getItem(`revision_service_logs_${currentUser.username}`);
 
+          if (cachedScores) setStudentScores(JSON.parse(cachedScores));
           if (cachedSessions) setRevisionSessions(JSON.parse(cachedSessions));
           if (cachedAttempts) setExamAttempts(JSON.parse(cachedAttempts));
           if (cachedServices) setRevisionServices(JSON.parse(cachedServices));
@@ -714,6 +889,7 @@ export default function App() {
       return;
     }
 
+    setIsLoggingIn(true);
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
@@ -744,6 +920,8 @@ export default function App() {
       }
     } catch (err) {
       showNotification("Network connection error during login.", "error");
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -815,15 +993,54 @@ export default function App() {
       return;
     }
 
+    setIsSavingScore(true);
+
+    const uniqueId = generate9DigitId();
+    const currentISO = new Date().toISOString();
+    const pct = Math.round((rawVal / testTemplate.maxScore) * 100);
+    
+    // Simple mock grade calculation for immediate UI response
+    const tempGrade = pct >= 90 ? "9" : pct >= 80 ? "8" : pct >= 70 ? "7" : pct >= 60 ? "6" : pct >= 50 ? "5" : pct >= 40 ? "4" : "U";
+
+    const newScoreEntry: ScoreEntry = {
+      id: uniqueId,
+      studentUsername: currentUser.username,
+      studentNickname: currentUser.nickname || currentUser.username,
+      testId: selectedTestId,
+      testName: testTemplate.testName,
+      maxScore: testTemplate.maxScore,
+      score: rawVal,
+      percentage: pct,
+      grade: tempGrade,
+      date: newScoreDate,
+      classGroup: currentUser.classGroup || "General",
+      academicYear: currentUser.academicYear || "1",
+      updatedAt: currentISO
+    };
+
+    setStudentScores(prev => {
+      // Remove any existing score with same uniqueId to prevent duplicates
+      const filtered = prev.filter(s => s.id !== uniqueId);
+      const updated = [...filtered, newScoreEntry];
+      try {
+        localStorage.setItem(`scores_${currentUser?.username}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error("localStorage write error", e);
+      }
+      return updated;
+    });
+
     try {
       const response = await fetch("/api/scores", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: uniqueId,
           studentUsername: currentUser.username,
           testId: selectedTestId,
           score: rawVal,
-          date: newScoreDate
+          date: newScoreDate,
+          updatedAt: currentISO
         })
       });
       const data = await response.json();
@@ -831,12 +1048,14 @@ export default function App() {
       if (response.ok && data.success) {
         showNotification(`Logged ${data.score.percentage}% successfully: Grade ${data.score.grade}!`, "success");
         setStudentScoreRaw("");
-        syncApplicationData();
+        await syncApplicationData(true); // Quiet sync
       } else {
         showNotification(data.error || "Submission failed.", "error");
       }
     } catch (err) {
-      showNotification("Network connection error. Please try again.", "error");
+      showNotification("Network delay. Score saved locally.", "info");
+    } finally {
+      setIsSavingScore(false);
     }
   };
 
@@ -868,16 +1087,18 @@ export default function App() {
     setRevTopic("");
     setRevComment("");
 
-    // Optimistically update locally
-    const tempId = "session-" + Date.now() + Math.floor(Math.random() * 1000);
+    // Optimistically update locally with a unique 9-digit code ID
+    const uniqueId = generate9DigitId();
+    const currentISO = new Date().toISOString();
     const newSession: RevisionSession = {
-      id: tempId,
+      id: uniqueId,
       studentUsername: currentUser.username,
       date: savedDate,
       duration: durationMin,
       topic: savedTopic,
       rag: savedRag,
-      comment: savedComment
+      comment: savedComment,
+      updatedAt: currentISO
     };
 
     setRevisionSessions(prev => {
@@ -895,12 +1116,14 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: uniqueId,
           studentUsername: currentUser.username,
           date: savedDate,
           duration: durationMin,
           topic: savedTopic,
           rag: savedRag,
-          comment: savedComment
+          comment: savedComment,
+          updatedAt: currentISO
         })
       })
       .then(async response => {
@@ -941,16 +1164,18 @@ export default function App() {
     setQuickLogTopic("");
     setShowQuickLogForm(false);
 
-    // Optimistically update locally
-    const tempId = "session-" + Date.now() + Math.floor(Math.random() * 1000);
+    // Optimistically update locally with a unique 9-digit ID
+    const uniqueId = generate9DigitId();
+    const currentISO = new Date().toISOString();
     const newSession: RevisionSession = {
-      id: tempId,
+      id: uniqueId,
       studentUsername: currentUser.username,
       date: new Date().toISOString().split("T")[0],
       duration: mins,
       topic: savedTopic,
       rag: savedRag,
-      comment: "Logged automatically via live revision timer."
+      comment: "Logged automatically via live revision timer.",
+      updatedAt: currentISO
     };
 
     setRevisionSessions(prev => {
@@ -968,12 +1193,14 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: uniqueId,
           studentUsername: currentUser.username,
           date: new Date().toISOString().split("T")[0],
           duration: mins,
           topic: savedTopic,
           rag: savedRag,
-          comment: "Logged automatically via live revision timer."
+          comment: "Logged automatically via live revision timer.",
+          updatedAt: currentISO
         })
       })
       .then(async response => {
@@ -1078,12 +1305,13 @@ export default function App() {
     setExamSelfMark("");
     setExamRag("green");
 
-    // Optimistically update locally
-    const tempId = "exam-" + Date.now() + Math.floor(Math.random() * 1000);
+    // Optimistically update locally with a unique 9-digit client ID and updatedAt
+    const uniqueId = generate9DigitId();
+    const currentISO = new Date().toISOString();
     const computedDuration = Math.max(1, Math.round(marksAvail * 1.35));
 
     const newAttempt: ExamAttempt = {
-      id: tempId,
+      id: uniqueId,
       studentUsername: currentUser.username,
       component: savedComponent,
       topic: savedTopic,
@@ -1092,7 +1320,8 @@ export default function App() {
       marksScored: marksSc,
       selfMarkingScore: selfM,
       date: examDate,
-      rag: savedRag
+      rag: savedRag,
+      updatedAt: currentISO
     };
 
     const examMeta = {
@@ -1107,13 +1336,14 @@ export default function App() {
     const formattedComment = `Component: ${examMeta.component} | Score: ${examMeta.marksScored}/${examMeta.marksAvailable} | Self Assessed Score: ${examMeta.selfMarkingScore}/10 | Topic Area: ${examMeta.topicArea} __EXAM_METADATA__:${JSON.stringify(examMeta)}`;
 
     const newSession: RevisionSession = {
-      id: tempId,
+      id: uniqueId,
       studentUsername: currentUser.username,
       date: examDate,
       duration: computedDuration,
       topic: savedWording,
       rag: savedRag,
-      comment: formattedComment
+      comment: formattedComment,
+      updatedAt: currentISO
     };
 
     setExamAttempts(prev => {
@@ -1141,6 +1371,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: uniqueId,
           studentUsername: currentUser.username,
           component: savedComponent,
           topic: savedTopic,
@@ -1149,7 +1380,8 @@ export default function App() {
           marksScored: marksSc,
           selfMarkingScore: selfM,
           date: examDate,
-          rag: savedRag
+          rag: savedRag,
+          updatedAt: currentISO
         })
       })
       .then(async response => {
@@ -1234,13 +1466,17 @@ export default function App() {
     setNewServiceName("");
     setNewServiceUrl("");
 
-    // Optimistically update locally
-    const tempId = "service-" + Date.now() + Math.floor(Math.random() * 1000);
+    setIsRegisteringShortcut(true);
+
+    // Optimistically update locally with a 9-digit client ID and updatedAt
+    const uniqueId = generate9DigitId();
+    const currentISO = new Date().toISOString();
     const newService: RevisionService = {
-      id: tempId,
+      id: uniqueId,
       studentUsername: currentUser.username,
       name: savedName,
-      url: savedUrl
+      url: savedUrl,
+      updatedAt: currentISO
     };
 
     setRevisionServices(prev => {
@@ -1258,9 +1494,11 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: uniqueId,
           studentUsername: currentUser.username,
           name: savedName,
-          url: savedUrl
+          url: savedUrl,
+          updatedAt: currentISO
         })
       })
       .then(async response => {
@@ -1274,8 +1512,13 @@ export default function App() {
       })
       .catch(() => {
         showNotification("Network delay. Service registered locally.", "info");
+      })
+      .finally(() => {
+        setIsRegisteringShortcut(false);
       });
-    } catch (_) {}
+    } catch (_) {
+      setIsRegisteringShortcut(false);
+    }
   };
 
   // Delete Revision service
@@ -1348,28 +1591,33 @@ export default function App() {
     setLogServiceDuration("");
     setLogServiceRag("green");
 
-    // Optimistically update locally
-    const tempLogId = "rsl-" + Date.now() + Math.random().toString(36).substring(4, 7);
-    const tempSessionId = String(Date.now() + Math.floor(Math.random() * 1000));
+    setIsLoggingService(true);
+
+    // Optimistically update locally with a unique 9-digit ID and updatedAt
+    const uniqueLogId = generate9DigitId();
+    const uniqueSessionId = generate9DigitId();
+    const currentISO = new Date().toISOString();
     const currentDate = new Date().toISOString().split("T")[0];
 
     const newLog: RevisionServiceLog = {
-      id: tempLogId,
+      id: uniqueLogId,
       studentUsername: currentUser.username,
       serviceId: savedServiceId,
       serviceName: service.name,
       duration: durationMin,
-      date: currentDate
+      date: currentDate,
+      updatedAt: currentISO
     };
 
     const newSession: RevisionSession = {
-      id: tempSessionId,
+      id: uniqueSessionId,
       studentUsername: currentUser.username,
       date: currentDate,
       duration: durationMin,
       topic: `Study on ${service.name}`,
       rag: savedRag,
-      comment: `Logged automatically via external app: ${service.name} __EXTERNAL_APP__:${service.name}`
+      comment: `Logged automatically via external app: ${service.name} __EXTERNAL_APP__:${service.name}`,
+      updatedAt: currentISO
     };
 
     setRevisionServiceLogs(prev => {
@@ -1397,12 +1645,15 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          id: uniqueLogId,
+          sessionId: uniqueSessionId,
           studentUsername: currentUser.username,
           serviceId: savedServiceId,
           serviceName: service.name,
           duration: durationMin,
           date: currentDate,
-          rag: savedRag
+          rag: savedRag,
+          updatedAt: currentISO
         })
       })
       .then(async response => {
@@ -1416,8 +1667,13 @@ export default function App() {
       })
       .catch(() => {
         showNotification("Network delay. Logged locally.", "info");
+      })
+      .finally(() => {
+        setIsLoggingService(false);
       });
-    } catch (_) {}
+    } catch (_) {
+      setIsLoggingService(false);
+    }
   };
 
   // Handle Score Deletion (Student side)
@@ -1426,13 +1682,24 @@ export default function App() {
       "Delete Score Submission",
       "Are you sure you want to delete this score? This will update your statistics.",
       async () => {
+        // Optimistically delete from state & cache
+        setStudentScores(prev => {
+          const filtered = prev.filter(s => s.id !== scoreId);
+          try {
+            localStorage.setItem(`scores_${currentUser?.username}`, JSON.stringify(filtered));
+          } catch (e) {
+            console.error("localStorage write error", e);
+          }
+          return filtered;
+        });
+
         try {
           const response = await fetch(`/api/scores/${scoreId}`, {
             method: "DELETE"
           });
           if (response.ok) {
             showNotification("Score deleted successfully.", "success");
-            syncApplicationData();
+            await syncApplicationData(true); // Quiet sync
           }
         } catch (err) {
           showNotification("Failed to delete score. Connection issue.", "error");
@@ -1976,7 +2243,7 @@ export default function App() {
     thisWeekStart.setHours(0, 0, 0, 0);
 
     const histogram = [];
-    for (let i = 3; i >= 0; i--) {
+    for (let i = 5; i >= 0; i--) {
       const wStart = new Date(thisWeekStart);
       wStart.setDate(thisWeekStart.getDate() - i * 7);
       
@@ -2336,9 +2603,17 @@ export default function App() {
                   <button
                     id="login-submit-btn"
                     type="submit"
-                    className="w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white transition shadow-lg font-display tracking-wide uppercase active:scale-[0.98] bg-purple-700 hover:bg-purple-650 shadow-purple-650/15"
+                    disabled={isLoggingIn}
+                    className="w-full py-3.5 mt-4 rounded-xl font-bold text-sm text-white transition shadow-lg font-display tracking-wide uppercase active:scale-[0.98] bg-purple-700 hover:bg-purple-650 shadow-purple-650/15 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                   >
-                    Log in
+                    {isLoggingIn ? (
+                      <>
+                        <span className="w-4 h-4 border-2 border-white/35 border-t-white rounded-full animate-spin"></span>
+                        <span>Verifying Access...</span>
+                      </>
+                    ) : (
+                      <span>Log in</span>
+                    )}
                   </button>
                 </form>
 
@@ -2522,9 +2797,17 @@ export default function App() {
                       <button
                         id="score-submit-btn"
                         type="submit"
-                        className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] active:bg-emerald-600 active:shadow-emerald-500/30 shadow-md cursor-pointer"
+                        disabled={isSavingScore}
+                        className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold uppercase text-white bg-purple-700 hover:bg-purple-650 tracking-wide transition-all duration-150 hover:scale-[1.015] active:scale-[1.03] shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                       >
-                        File Score Record
+                        {isSavingScore ? (
+                          <>
+                            <span className="w-3.5 h-3.5 border-2 border-white/35 border-t-white rounded-full animate-spin"></span>
+                            <span>Filing Entry...</span>
+                          </>
+                        ) : (
+                          <span>File Score Record</span>
+                        )}
                       </button>
                     </form>
                   ) : tests.length > 0 ? (
@@ -3186,9 +3469,17 @@ export default function App() {
                         </div>
                         <button
                           type="submit"
-                          className="w-full bg-purple-950 hover:bg-purple-900 border border-purple-800 text-purple-300 py-1.5 rounded-lg text-xs font-semibold transition active:scale-[0.98]"
+                          disabled={isRegisteringShortcut}
+                          className="w-full bg-purple-950 hover:bg-purple-900 border border-purple-800 text-purple-300 py-1.5 rounded-lg text-xs font-semibold transition active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                         >
-                          + Register New Rev Button
+                          {isRegisteringShortcut ? (
+                            <>
+                              <span className="w-3.5 h-3.5 border-2 border-purple-400/35 border-t-purple-400 rounded-full animate-spin"></span>
+                              <span>Registering Button...</span>
+                            </>
+                          ) : (
+                            <span>+ Register New Rev Button</span>
+                          )}
                         </button>
                       </form>
 
@@ -3295,9 +3586,17 @@ export default function App() {
                             </div>
                             <button
                               type="submit"
-                              className="w-full bg-purple-700 hover:bg-purple-650 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
+                              disabled={isLoggingService}
+                              className="w-full bg-purple-700 hover:bg-purple-650 text-white py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              🚀 Log Study Session
+                              {isLoggingService ? (
+                                <>
+                                  <span className="w-3.5 h-3.5 border-2 border-white/35 border-t-white rounded-full animate-spin"></span>
+                                  <span>Logging Session...</span>
+                                </>
+                              ) : (
+                                <span>🚀 Log Study Session</span>
+                              )}
                             </button>
                           </form>
                         </div>
