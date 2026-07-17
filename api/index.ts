@@ -579,10 +579,20 @@ async function loadDB(bypassCache = false): Promise<DBStructure> {
           if (l && l.id) mergedServiceLogsMap.set(String(l.id), l);
         });
 
+        const mergedScoresMap = new Map();
+        if (localBackup && Array.isArray(localBackup.scores)) {
+          localBackup.scores.forEach((s: any) => {
+            if (s && s.id) mergedScoresMap.set(String(s.id), s);
+          });
+        }
+        scores.forEach((s: any) => {
+          if (s && s.id) mergedScoresMap.set(String(s.id), s);
+        });
+
         dbCache = { 
           tests, 
           students, 
-          scores,
+          scores: Array.from(mergedScoresMap.values()),
           revisionSessions: Array.from(mergedSessionsMap.values()),
           examAttempts: Array.from(mergedExamAttemptsMap.values()),
           revisionServices: Array.from(mergedServicesMap.values()),
@@ -1197,7 +1207,7 @@ app.delete("/api/tests/:id", async (req, res) => {
 // 6. SUBMIT STUDENT SCORE
 app.post("/api/scores", async (req, res) => {
   try {
-    const { studentUsername, testId, score, date } = req.body;
+    const { id, studentUsername, testId, score, date, updatedAt } = req.body;
     if (!studentUsername || !testId || score === undefined || !date) {
       res.status(400).json({ error: "Missing score details." });
       return;
@@ -1225,9 +1235,9 @@ app.post("/api/scores", async (req, res) => {
     const percentage = Number(((rawScore / maxScore) * 100).toFixed(2));
     const grade = determineGrade(percentage);
 
-    const id = "s-" + Date.now();
+    const scoreId = id || "s-" + Date.now();
     const scoreEntry = {
-      id,
+      id: scoreId,
       studentUsername: student.username,
       studentNickname: student.nickname,
       testId: test.id,
@@ -1239,11 +1249,12 @@ app.post("/api/scores", async (req, res) => {
       date,
       classGroup: student.classGroup,
       academicYear: student.academicYear,
+      updatedAt: updatedAt || new Date().toISOString()
     };
 
-    // Ensure no duplicate score for the same student on the same test template
+    // Ensure no duplicate score for the same student on the same test template OR with same ID
     db.scores = db.scores.filter(
-      s => !(s.studentUsername === student.username && s.testId === test.id)
+      s => !(s.studentUsername === student.username && s.testId === test.id) && s.id !== scoreId
     );
 
     db.scores.push(scoreEntry);
@@ -1657,7 +1668,7 @@ app.get("/api/student/revision-data", async (req, res) => {
 // 11. POST REVISION SESSION
 app.post("/api/student/revision-session", async (req, res) => {
   try {
-    const { studentUsername, date, duration, topic, rag, comment } = req.body;
+    const { id, studentUsername, date, duration, topic, rag, comment, updatedAt } = req.body;
     if (!studentUsername || !date || duration === undefined || !topic || !rag) {
       res.status(400).json({ error: "Missing required revision session fields." });
       return;
@@ -1665,8 +1676,8 @@ app.post("/api/student/revision-session", async (req, res) => {
     const db = await loadDB(true);
     if (!db.revisionSessions) db.revisionSessions = [];
 
-    // Generate unique number ID (string containing only digits)
-    const uniqueIdNum = String(Date.now() + Math.floor(Math.random() * 1000000));
+    // Use client-provided ID or generate unique number ID
+    const uniqueIdNum = id || String(Date.now() + Math.floor(Math.random() * 1000000));
 
     const newSession = {
       id: uniqueIdNum,
@@ -1675,9 +1686,12 @@ app.post("/api/student/revision-session", async (req, res) => {
       duration: Number(duration),
       topic: String(topic).trim(),
       rag: rag as "red" | "amber" | "green",
-      comment: String(comment || "").trim()
+      comment: String(comment || "").trim(),
+      updatedAt: updatedAt || new Date().toISOString()
     };
 
+    // Filter out duplicates with the same ID before pushing
+    db.revisionSessions = db.revisionSessions.filter(s => s.id !== uniqueIdNum);
     db.revisionSessions.push(newSession);
     await saveDB(db);
 
@@ -1709,7 +1723,7 @@ app.delete("/api/student/revision-session/:id", async (req, res) => {
 // 13. POST EXAM ATTEMPT
 app.post("/api/student/exam-attempt", async (req, res) => {
   try {
-    const { studentUsername, component, topic, questionWording, marksAvailable, marksScored, selfMarkingScore, date, rag } = req.body;
+    const { id, studentUsername, component, topic, questionWording, marksAvailable, marksScored, selfMarkingScore, date, rag, updatedAt } = req.body;
     if (!studentUsername || !component || !topic || !questionWording || marksAvailable === undefined || marksScored === undefined) {
       res.status(400).json({ error: "Missing required exam attempt fields." });
       return;
@@ -1726,8 +1740,8 @@ app.post("/api/student/exam-attempt", async (req, res) => {
     // 135 / 100 = 1.35 mins per mark
     const computedDuration = Math.max(1, Math.round(parsedMarksAvailable * 1.35));
 
-    // Generate unique number ID (string containing only digits)
-    const uniqueIdNum = String(Date.now() + Math.floor(Math.random() * 1000000));
+    // Use client-provided ID or generate unique number ID
+    const uniqueIdNum = id || String(Date.now() + Math.floor(Math.random() * 1000000));
 
     // 1. Create entry for examAttempts table
     const newAttempt = {
@@ -1740,7 +1754,8 @@ app.post("/api/student/exam-attempt", async (req, res) => {
       marksScored: parsedMarksScored,
       selfMarkingScore: parsedSelfMarkingScore,
       date: String(date || new Date().toISOString().split("T")[0]).trim(),
-      rag: (rag || "green") as "red" | "amber" | "green" // linked rag rating tag!
+      rag: (rag || "green") as "red" | "amber" | "green", // linked rag rating tag!
+      updatedAt: updatedAt || new Date().toISOString()
     };
 
     // 2. Create entry for revision_sessions table using the same template
@@ -1763,8 +1778,13 @@ app.post("/api/student/exam-attempt", async (req, res) => {
       duration: computedDuration,
       topic: String(questionWording).trim(), // wording of the question fills the topic field
       rag: (rag || "green") as "red" | "amber" | "green",
-      comment: formattedComment
+      comment: formattedComment,
+      updatedAt: updatedAt || new Date().toISOString()
     };
+
+    // Filter out duplicates with the same ID before pushing
+    db.examAttempts = db.examAttempts.filter(a => a.id !== uniqueIdNum);
+    db.revisionSessions = db.revisionSessions.filter(s => s.id !== uniqueIdNum);
 
     db.examAttempts.push(newAttempt);
     db.revisionSessions.push(newSession);
@@ -1844,7 +1864,7 @@ app.delete("/api/student/revision-service/:id", async (req, res) => {
 // 17. LOG SERVICE DURATION
 app.post("/api/student/revision-services/log", async (req, res) => {
   try {
-    const { studentUsername, serviceId, serviceName, duration, date, rag } = req.body;
+    const { id, sessionId, studentUsername, serviceId, serviceName, duration, date, rag, updatedAt } = req.body;
     if (!studentUsername || !serviceId || !serviceName || duration === undefined || !date) {
       res.status(400).json({ error: "Missing required service log fields." });
       return;
@@ -1853,27 +1873,34 @@ app.post("/api/student/revision-services/log", async (req, res) => {
     if (!db.revisionServiceLogs) db.revisionServiceLogs = [];
     if (!db.revisionSessions) db.revisionSessions = [];
 
-    const newLogId = "rsl-" + Date.now() + Math.random().toString(36).substring(4, 7);
+    const finalLogId = id ? String(id).trim() : ("rsl-" + Date.now() + Math.random().toString(36).substring(4, 7));
+    const finalSessionId = sessionId ? String(sessionId).trim() : String(Date.now() + Math.floor(Math.random() * 1000000));
+    const finalUpdatedAt = updatedAt ? String(updatedAt) : new Date().toISOString();
+
     const newLog = {
-      id: newLogId,
+      id: finalLogId,
       studentUsername: String(studentUsername).trim(),
       serviceId: String(serviceId).trim(),
       serviceName: String(serviceName).trim(),
       duration: Number(duration),
-      date: String(date).trim()
+      date: String(date).trim(),
+      updatedAt: finalUpdatedAt
     };
 
-    // Generate matching unique session ID (string with digits only for DB compliance)
-    const uniqueSessionId = String(Date.now() + Math.floor(Math.random() * 1000000));
     const newSession = {
-      id: uniqueSessionId,
+      id: finalSessionId,
       studentUsername: String(studentUsername).trim(),
       date: String(date).trim(),
       duration: Number(duration),
       topic: `Study on ${serviceName}`,
       rag: (rag || "green") as "red" | "amber" | "green",
-      comment: `Logged automatically via external app: ${serviceName} __EXTERNAL_APP__:${serviceName}`
+      comment: `Logged automatically via external app: ${serviceName} __EXTERNAL_APP__:${serviceName}`,
+      updatedAt: finalUpdatedAt
     };
+
+    // Prevent duplicates
+    db.revisionServiceLogs = db.revisionServiceLogs.filter(l => l.id !== finalLogId);
+    db.revisionSessions = db.revisionSessions.filter(s => s.id !== finalSessionId);
 
     db.revisionServiceLogs.push(newLog);
     db.revisionSessions.push(newSession);
