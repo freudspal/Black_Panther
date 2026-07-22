@@ -76,6 +76,8 @@ export default function App() {
   const [flashLog, setFlashLog] = useState<boolean>(false);
   const flashTimeoutRef = useRef<any>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [backgroundSyncStatus, setBackgroundSyncStatus] = useState<"synced" | "syncing" | "error">("synced");
+  const [syncProgress, setSyncProgress] = useState<number>(100);
   const [systemMessage, setSystemMessage] = useState<Message | null>(null);
   const [verifiedActions, setVerifiedActions] = useState<Array<{
     id: string;
@@ -517,6 +519,18 @@ export default function App() {
     return getGradeSticker(percentage).name;
   }
 
+  function cleanComment(comment: string): string {
+    if (!comment) return "";
+    let clean = comment;
+    if (clean.includes("__EXAM_METADATA__:")) {
+      clean = clean.split("__EXAM_METADATA__:")[0];
+    }
+    if (clean.includes("__EXTERNAL_APP__:")) {
+      clean = clean.split("__EXTERNAL_APP__:")[0];
+    }
+    return clean.trim();
+  }
+
   const formatTime = (totalSeconds: number): string => {
     const hrs = Math.floor(totalSeconds / 3600);
     const mins = Math.floor((totalSeconds % 3600) / 60);
@@ -687,6 +701,8 @@ export default function App() {
       if (currentUser) {
         const timestamp = Date.now();
         if (currentUser.role === "student") {
+          setBackgroundSyncStatus("syncing");
+          setSyncProgress(15);
           // Load tests, student specific scores, and revision progress
           const [testsRes, scoresRes, revisionRes] = await Promise.all([
             fetch(`/api/tests?t=${timestamp}`),
@@ -696,6 +712,8 @@ export default function App() {
           const testsData = await testsRes.json();
           const scoresData = await scoresRes.json();
           const revisionData = await revisionRes.json();
+
+          setSyncProgress(35);
 
           if (testsData.success) {
             setTests(testsData.tests);
@@ -737,6 +755,7 @@ export default function App() {
             );
           }
           setStudentScores(finalScores);
+          setSyncProgress(60);
 
           // 2. Sync Revision Sessions & Exam Attempts
           let finalSessions = localSessions;
@@ -761,6 +780,8 @@ export default function App() {
               quiet
             );
 
+            setSyncProgress(80);
+
             finalAttempts = await syncLocalAndCloudData(
               `exam_attempts_${currentUser.username}`,
               localAttempts,
@@ -781,6 +802,8 @@ export default function App() {
               }),
               quiet
             );
+
+            setSyncProgress(90);
 
             let finalServiceLogs = localServiceLogs;
             finalServiceLogs = await syncLocalAndCloudData(
@@ -810,6 +833,8 @@ export default function App() {
 
           setRevisionSessions(finalSessions);
           setExamAttempts(finalAttempts);
+          setBackgroundSyncStatus("synced");
+          setSyncProgress(100);
 
         } else if (currentUser.role === "teacher") {
           // Load teacher panel summary metrics
@@ -824,6 +849,9 @@ export default function App() {
         showNotification("Data synchronized successfully.", "success");
       }
     } catch (err) {
+      if (currentUser?.role === "student") {
+        setBackgroundSyncStatus("error");
+      }
       if (!quiet) {
         showNotification("Connection delay during sync. Retrying with local data.", "error");
       }
@@ -880,11 +908,22 @@ export default function App() {
     }
   }, [teacherData, selectedChartStudent, selectedChartTestId, currentUser]);
 
-  // Auto-refresh when entering teacher dashboard or toggling between its sub-tabs
+  // Auto-refresh when entering teacher dashboard or toggling between its sub-tabs, with background polling
   useEffect(() => {
+    let intervalId: any;
     if (currentUser?.role === "teacher" && currentPage === "teacher-dashboard") {
       syncApplicationData(true); // quiet background update
+      
+      // Set up background polling every 15 seconds to keep teacher dashboard updated in real-time
+      intervalId = setInterval(() => {
+        syncApplicationData(true);
+      }, 15000);
     }
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
   }, [currentPage, teacherViewTab, currentUser]);
 
   const showNotification = (text: string, type: "success" | "error" | "info") => {
@@ -1057,33 +1096,35 @@ export default function App() {
       return updated;
     });
 
-    try {
-      const response = await fetch("/api/scores", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: uniqueId,
-          studentUsername: currentUser.username,
-          testId: selectedTestId,
-          score: rawVal,
-          date: newScoreDate,
-          updatedAt: currentISO
-        })
-      });
-      const data = await response.json();
+    // Reset inputs and stop spinning immediately so the user can enter another score right away
+    setStudentScoreRaw("");
+    setIsSavingScore(false);
 
+    // Perform database sync in the background without blocking the UI
+    fetch("/api/scores", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: uniqueId,
+        studentUsername: currentUser.username,
+        testId: selectedTestId,
+        score: rawVal,
+        date: newScoreDate,
+        updatedAt: currentISO
+      })
+    })
+    .then(async response => {
+      const data = await response.json();
       if (response.ok && data.success) {
-        showNotification(`Logged ${data.score.percentage}% successfully: Grade ${data.score.grade}!`, "success");
-        setStudentScoreRaw("");
-        await syncApplicationData(true); // Quiet sync
+        showNotification(`Synced ${data.score.percentage}% with cloud: Grade ${data.score.grade}`, "success");
+        syncApplicationData(true); // Quiet sync
       } else {
-        showNotification(data.error || "Submission failed.", "error");
+        showNotification(data.error || "Failed to sync score to cloud database.", "error");
       }
-    } catch (err) {
-      showNotification("Network delay. Score saved locally.", "info");
-    } finally {
-      setIsSavingScore(false);
-    }
+    })
+    .catch(() => {
+      showNotification("Network delay. Score saved locally and will sync in background.", "info");
+    });
   };
 
   // Submit Revision Session
@@ -1138,39 +1179,36 @@ export default function App() {
       return updated;
     });
 
-    try {
-      fetch("/api/student/revision-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: uniqueId,
-          studentUsername: currentUser.username,
-          date: savedDate,
-          duration: durationMin,
-          topic: savedTopic,
-          rag: savedRag,
-          comment: savedComment,
-          updatedAt: currentISO
-        })
+    // Unblock the form instantly so the user is never blocked from adding multiple entries
+    setIsSavingTopicLog(false);
+
+    // Perform database sync in the background
+    fetch("/api/student/revision-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: uniqueId,
+        studentUsername: currentUser.username,
+        date: savedDate,
+        duration: durationMin,
+        topic: savedTopic,
+        rag: savedRag,
+        comment: savedComment,
+        updatedAt: currentISO
       })
-      .then(async response => {
-        const data = await response.json();
-        if (response.ok && data.success) {
-          showNotification("Revision session logged successfully!", "success");
-          await syncApplicationData(true); // Quiet sync
-        } else {
-          showNotification(data.error || "Failed to log revision session to server.", "error");
-        }
-      })
-      .catch(() => {
-        showNotification("Network connection delay. Revision session saved locally.", "info");
-      })
-      .finally(() => {
-        setIsSavingTopicLog(false);
-      });
-    } catch (_) {
-      setIsSavingTopicLog(false);
-    }
+    })
+    .then(async response => {
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification("Revision session synchronized with cloud!", "success");
+        syncApplicationData(true); // Quiet sync
+      } else {
+        showNotification(data.error || "Failed to sync revision session to server.", "error");
+      }
+    })
+    .catch(() => {
+      showNotification("Network connection delay. Revision session saved locally.", "info");
+    });
   };
 
   // Submit Quick Revision from Live Timer
@@ -1393,42 +1431,39 @@ export default function App() {
       return updated;
     });
 
-    try {
-      fetch("/api/student/exam-attempt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: uniqueId,
-          studentUsername: currentUser.username,
-          component: savedComponent,
-          topic: savedTopic,
-          questionWording: savedWording,
-          marksAvailable: marksAvail,
-          marksScored: marksSc,
-          selfMarkingScore: selfM,
-          date: examDate,
-          rag: savedRag,
-          updatedAt: currentISO
-        })
+    // Unblock the form instantly so the user is never blocked from adding multiple entries
+    setIsSavingExamAttempt(false);
+
+    // Perform database sync in the background
+    fetch("/api/student/exam-attempt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: uniqueId,
+        studentUsername: currentUser.username,
+        component: savedComponent,
+        topic: savedTopic,
+        questionWording: savedWording,
+        marksAvailable: marksAvail,
+        marksScored: marksSc,
+        selfMarkingScore: selfM,
+        date: examDate,
+        rag: savedRag,
+        updatedAt: currentISO
       })
-      .then(async response => {
-        const data = await response.json();
-        if (response.ok && data.success) {
-          showNotification("Exam question attempt logged successfully!", "success");
-          await syncApplicationData(true); // Quiet sync
-        } else {
-          showNotification(data.error || "Failed to log exam attempt to server.", "error");
-        }
-      })
-      .catch(() => {
-        showNotification("Network connection delay. Exam attempt saved locally.", "info");
-      })
-      .finally(() => {
-        setIsSavingExamAttempt(false);
-      });
-    } catch (_) {
-      setIsSavingExamAttempt(false);
-    }
+    })
+    .then(async response => {
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification("Exam question attempt synchronized with cloud!", "success");
+        syncApplicationData(true); // Quiet sync
+      } else {
+        showNotification(data.error || "Failed to sync exam attempt to server.", "error");
+      }
+    })
+    .catch(() => {
+      showNotification("Network connection delay. Exam attempt saved locally.", "info");
+    });
   };
 
   // Delete Exam question attempt
@@ -1667,39 +1702,37 @@ export default function App() {
       return updated;
     });
 
-    try {
-      fetch("/api/student/revision-services/log", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: uniqueLogId,
-          sessionId: uniqueSessionId,
-          studentUsername: currentUser.username,
-          serviceId: savedServiceId,
-          serviceName: service.name,
-          duration: durationMin,
-          date: currentDate,
-          rag: savedRag,
-          updatedAt: currentISO
-        })
+    // Unblock immediately so user is never blocked from subsequent inputs
+    setIsLoggingService(false);
+
+    // Perform database sync in the background
+    fetch("/api/student/revision-services/log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: uniqueLogId,
+        sessionId: uniqueSessionId,
+        studentUsername: currentUser.username,
+        serviceId: savedServiceId,
+        serviceName: service.name,
+        duration: durationMin,
+        date: currentDate,
+        rag: savedRag,
+        updatedAt: currentISO
       })
-      .then(async response => {
-        const data = await response.json();
-        setIsLoggingService(false); // Snappy UI: turn off loading indicator immediately!
-        if (response.ok && data.success) {
-          showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
-          syncApplicationData(true); // Run quiet sync in the background without blocking
-        } else {
-          showNotification(data.error || "Failed to log service time on server.", "error");
-        }
-      })
-      .catch(() => {
-        setIsLoggingService(false);
-        showNotification("Network delay. Logged locally.", "info");
-      });
-    } catch (_) {
-      setIsLoggingService(false);
-    }
+    })
+    .then(async response => {
+      const data = await response.json();
+      if (response.ok && data.success) {
+        showNotification(`Logged ${durationMin} mins on "${service.name}"!`, "success");
+        syncApplicationData(true); // Run quiet sync in the background
+      } else {
+        showNotification(data.error || "Failed to log service time on server.", "error");
+      }
+    })
+    .catch(() => {
+      showNotification("Network delay. Logged locally.", "info");
+    });
   };
 
   // Handle Score Deletion (Student side)
@@ -2680,6 +2713,62 @@ export default function App() {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Cloud Database Sync Status bar */}
+            <div className="bg-neutral-950/80 border border-purple-950/80 rounded-2xl px-5 py-3.5 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs animate-fade-in">
+              <div className="flex items-center space-x-3">
+                <div className="relative flex items-center justify-center h-5 w-5">
+                  {backgroundSyncStatus === "syncing" ? (
+                    <>
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-purple-500/30 opacity-75"></span>
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-purple-500"></span>
+                    </>
+                  ) : backgroundSyncStatus === "error" ? (
+                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]"></span>
+                  ) : (
+                    <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
+                  )}
+                </div>
+                <div className="flex flex-col">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-semibold text-neutral-200">
+                      {backgroundSyncStatus === "syncing" && "Syncing with Cloud Database..."}
+                      {backgroundSyncStatus === "synced" && "Cloud Database Synchronized"}
+                      {backgroundSyncStatus === "error" && "Sync delayed (offline-safe mode active)"}
+                    </span>
+                    {backgroundSyncStatus === "syncing" && (
+                      <span className="text-[10px] text-purple-400 font-mono font-bold">({syncProgress}%)</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-neutral-400 leading-none mt-1">
+                    {backgroundSyncStatus === "syncing" && "Your inputs are saved locally and are currently uploading behind-the-scenes."}
+                    {backgroundSyncStatus === "synced" && "Your local revision records, grades, and attempts are perfectly synced with Cloud Storage."}
+                    {backgroundSyncStatus === "error" && "A network error occurred. All entries are preserved locally in offline storage and will sync upon next retry."}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3 self-end sm:self-auto">
+                {backgroundSyncStatus === "syncing" ? (
+                  <div className="w-24 bg-neutral-900 rounded-full h-1.5 overflow-hidden border border-purple-950/40">
+                    <div 
+                      className="bg-purple-500 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${syncProgress}%` }}
+                    ></div>
+                  </div>
+                ) : backgroundSyncStatus === "error" ? (
+                  <button
+                    type="button"
+                    onClick={() => syncApplicationData(true)}
+                    className="px-3.5 py-1.5 bg-amber-950/60 hover:bg-amber-900 border border-amber-900/60 text-amber-300 hover:text-white rounded-lg text-[10px] font-bold tracking-wider uppercase transition active:scale-95 cursor-pointer flex items-center space-x-1.5"
+                  >
+                    <span>Retry Sync</span>
+                  </button>
+                ) : (
+                  <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold tracking-wider bg-emerald-950/30 border border-emerald-900/30 px-2.5 py-1 rounded-md">Cloud Secure</span>
+                )}
+              </div>
             </div>
 
             {studentTab === "my-progress" && (
@@ -3983,7 +4072,7 @@ export default function App() {
                           type: "topic" as const,
                           date: dateVal,
                           title: topic,
-                          details: comment,
+                          details: cleanComment(comment),
                           badge: rating.toUpperCase(),
                           badgeColor: rating === "green" 
                             ? "bg-green-500/10 text-green-400 border border-green-500/20" 
@@ -3993,7 +4082,7 @@ export default function App() {
                           meta: `${duration} mins`,
                           rag: rating,
                           fullTopic: topic,
-                          fullComment: comment,
+                          fullComment: cleanComment(comment),
                           fullDuration: duration,
                           updatedAt: s.updatedAt
                         });
@@ -4784,11 +4873,11 @@ export default function App() {
               </div>
             </div>
 
-            {/* Double Segment Grid: Left is assessments templated. Right is individual records drilling */}
-            <div className="grid lg:grid-cols-12 gap-8">
+            {/* Split layout: Top is Release assessment templates as side-by-side components, Bottom is full-width Student Rosters & Records Tracker */}
+            <div className="space-y-8">
               
               {/* Release assessment templates */}
-              <div className="lg:col-span-5 flex flex-col space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
 
                 {/* Score Bulk Upload & Manual Ingestion Command Card */}
                 <div className="bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl flex flex-col space-y-4">
@@ -5212,37 +5301,88 @@ export default function App() {
               </div>
 
               {/* Recruited Class members drilldown */}
-              <div className="lg:col-span-7 bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-purple-950/35 pb-4 gap-2 mb-2">
+              <div className="bg-neutral-950/70 border border-purple-950 rounded-3xl p-6 shadow-xl space-y-4 w-full">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between border-b border-purple-950/35 pb-4 gap-4 mb-2">
                   <h3 className="text-sm font-semibold text-neutral-400 flex items-center space-x-2">
                     <Users className="w-4 h-4 text-purple-400" />
                     <span>Student Rosters & Records Tracker</span>
+                    <button
+                      onClick={() => syncApplicationData(false)}
+                      title="Force Sync Roster & Logs Now"
+                      className="p-1 text-neutral-500 hover:text-purple-400 transition hover:bg-purple-950/25 rounded ml-2 inline-flex items-center"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-purple-400" : ""}`} />
+                    </button>
                   </h3>
                   
-                  {/* View mode toggle */}
-                  <div className="flex bg-[#030304] border border-purple-950/80 rounded-xl p-1 inline-flex self-start">
-                    <button
-                      type="button"
-                      onClick={() => setRosterViewMode("list")}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition ${
-                        rosterViewMode === "list"
-                          ? "bg-purple-900/40 text-purple-200 border border-purple-850/60 shadow-inner"
-                          : "text-neutral-500 hover:text-neutral-300"
-                      }`}
-                    >
-                      Single List
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRosterViewMode("by-group")}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition ${
-                        rosterViewMode === "by-group"
-                          ? "bg-purple-900/40 text-purple-200 border border-purple-850/60 shadow-inner"
-                          : "text-neutral-500 hover:text-neutral-300"
-                      }`}
-                    >
-                      Per Group View
-                    </button>
+                  {/* Direct interactive filtering inside tracker */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Filter Class Group */}
+                    <div className="flex items-center space-x-2 bg-[#030304] border border-purple-950/80 rounded-xl px-2.5 py-1.5">
+                      <span className="text-[9px] font-mono uppercase text-neutral-500">Group:</span>
+                      <select
+                        id="tracker-filter-class"
+                        value={teacherFilterClass}
+                        onChange={(e) => {
+                          setTeacherFilterClass(e.target.value);
+                          setSelectedStudentDrilldown(null);
+                        }}
+                        className="bg-transparent text-xs text-purple-300 font-semibold focus:outline-none cursor-pointer"
+                      >
+                        <option value="ALL">All Groups</option>
+                        <option value="A">Group A</option>
+                        <option value="B">Group B</option>
+                        <option value="C">Group C</option>
+                        <option value="D">Group D</option>
+                        <option value="E">Group E</option>
+                      </select>
+                    </div>
+
+                    {/* Filter Year Cycle */}
+                    <div className="flex items-center space-x-2 bg-[#030304] border border-purple-950/80 rounded-xl px-2.5 py-1.5">
+                      <span className="text-[9px] font-mono uppercase text-neutral-500">Year:</span>
+                      <select
+                        id="tracker-filter-year"
+                        value={teacherFilterYear}
+                        onChange={(e) => {
+                          setTeacherFilterYear(e.target.value);
+                          setSelectedStudentDrilldown(null);
+                        }}
+                        className="bg-transparent text-xs text-purple-300 font-semibold focus:outline-none cursor-pointer"
+                      >
+                        <option value="ALL">All Years</option>
+                        <option value="26-27">Year 26-27</option>
+                        <option value="27-28">Year 27-28</option>
+                        <option value="28-29">Year 28-29</option>
+                        <option value="29-30">Year 29-30</option>
+                      </select>
+                    </div>
+
+                    {/* View mode toggle */}
+                    <div className="flex bg-[#030304] border border-purple-950/80 rounded-xl p-1 inline-flex">
+                      <button
+                        type="button"
+                        onClick={() => setRosterViewMode("list")}
+                        className={`px-3 py-1 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition ${
+                          rosterViewMode === "list"
+                            ? "bg-purple-900/40 text-purple-200 border border-purple-850/60 shadow-inner"
+                            : "text-neutral-500 hover:text-neutral-300"
+                        }`}
+                      >
+                        Single List
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRosterViewMode("by-group")}
+                        className={`px-3 py-1 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider transition ${
+                          rosterViewMode === "by-group"
+                            ? "bg-purple-900/40 text-purple-200 border border-purple-850/60 shadow-inner"
+                            : "text-neutral-500 hover:text-neutral-300"
+                        }`}
+                      >
+                        By Group
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -5959,7 +6099,10 @@ export default function App() {
                     const selectedStudentObj = students.find(s => s.username === selectedChartStudent);
                     if (!selectedStudentObj) return null;
 
-                    const sSessions = sessions.filter(s => s.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase());
+                    const sSessions = sessions.filter(
+                      s => s.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase() &&
+                           !s.comment?.includes("__EXAM_METADATA__:")
+                    );
                     const sAttempts = attempts.filter(a => a.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase());
 
                     return (
@@ -6005,7 +6148,7 @@ export default function App() {
                                         {sess.rag}
                                       </span>
                                     </div>
-                                    <p className="text-xs text-neutral-400 italic">"{sess.comment || "No commentary logged."}"</p>
+                                    <p className="text-xs text-neutral-400 italic">"{cleanComment(sess.comment) || "No commentary logged."}"</p>
                                     <div className="flex items-center space-x-4 text-[9px] text-neutral-500 font-mono">
                                       <span>Date: {sess.date}</span>
                                       <span>Duration: {sess.duration} mins</span>
