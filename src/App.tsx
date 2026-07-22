@@ -189,6 +189,7 @@ export default function App() {
   const [teacherFilterClass, setTeacherFilterClass] = useState<string>("ALL");
   const [teacherFilterYear, setTeacherFilterYear] = useState<string>("ALL");
   const [selectedStudentDrilldown, setSelectedStudentDrilldown] = useState<string | null>(null);
+  const [drilldownSubTab, setDrilldownSubTab] = useState<"timeline" | "scores" | "sessions" | "attempts" | "service-logs">("timeline");
   const [rosterViewMode, setRosterViewMode] = useState<"list" | "by-group">("list");
   const [schoolYearSearch, setSchoolYearSearch] = useState<string>("");
 
@@ -530,6 +531,199 @@ export default function App() {
     }
     return clean.trim();
   }
+
+  const buildStudentUnifiedLogs = (username: string) => {
+    const rawLogs: any[] = [];
+    const sSessions = (teacherData.revisionSessions || []).filter(
+      s => s.studentUsername.toLowerCase() === username.toLowerCase()
+    );
+    const sAttempts = (teacherData.examAttempts || []).filter(
+      a => a.studentUsername.toLowerCase() === username.toLowerCase()
+    );
+    const sServiceLogs = (teacherData.revisionServiceLogs || []).filter(
+      l => l.studentUsername.toLowerCase() === username.toLowerCase()
+    );
+
+    // 1. Process revision sessions
+    for (const s of sSessions) {
+      const rating = s.rag || "green";
+      const duration = s.duration || 0;
+      const topic = s.topic || "";
+      const comment = s.comment || "";
+      const dateVal = s.date || "";
+
+      // Check if this is an external app log
+      if (comment.includes("__EXTERNAL_APP__:")) {
+        try {
+          const parts = comment.split("__EXTERNAL_APP__:");
+          const extAppName = parts[1] ? parts[1].trim() : "External App";
+          rawLogs.push({
+            id: `session-${s.id}`,
+            originalId: s.id,
+            type: "external",
+            date: dateVal,
+            title: topic || `Study on ${extAppName}`,
+            details: `Logged automatically via external app: ${extAppName}`,
+            badge: rating.toUpperCase(),
+            badgeColor: rating === "green" 
+              ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+              : rating === "amber" 
+              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+              : "bg-red-500/10 text-red-400 border border-red-500/20",
+            meta: `${duration} mins`,
+            rag: rating,
+            fullTopic: topic,
+            fullComment: comment,
+            fullDuration: duration,
+            updatedAt: s.updatedAt || s.date
+          });
+          continue;
+        } catch (_) {}
+      }
+
+      // Check if this is an exam question logged inside revision sessions
+      if (comment.includes("__EXAM_METADATA__:")) {
+        try {
+          const parts = comment.split("__EXAM_METADATA__:");
+          const meta = JSON.parse(parts[1]);
+          const normPercent = meta.marksAvailable > 0 ? (meta.marksScored / meta.marksAvailable) * 100 : 0;
+          
+          rawLogs.push({
+            id: `session-${s.id}`,
+            originalId: s.id,
+            type: "exam",
+            date: dateVal,
+            title: `${meta.component} - ${meta.topicArea}`,
+            details: topic, // Question wording is stored in the topic field
+            badge: `Exam Score: ${meta.marksScored}/${meta.marksAvailable} (${normPercent.toFixed(0)}%)`,
+            badgeColor: rating === "green" 
+              ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+              : rating === "amber" 
+              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+              : "bg-red-500/10 text-red-400 border border-red-500/20",
+            meta: `Self-Mark: ${meta.selfMarkingScore || 0}/10`,
+            rag: rating,
+            fullComponent: meta.component,
+            fullTopic: meta.topicArea,
+            fullWording: topic,
+            fullMarksScored: meta.marksScored,
+            fullMarksAvailable: meta.marksAvailable,
+            fullPercentage: normPercent,
+            fullSelfScore: meta.selfMarkingScore || 0,
+            fullDuration: duration,
+            updatedAt: s.updatedAt || s.date
+          });
+          continue;
+        } catch (_) {}
+      }
+
+      // Regular study topic log
+      rawLogs.push({
+        id: `session-${s.id}`,
+        originalId: s.id,
+        type: "topic",
+        date: dateVal,
+        title: topic,
+        details: cleanComment(comment),
+        badge: rating.toUpperCase(),
+        badgeColor: rating === "green" 
+          ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+          : rating === "amber" 
+          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+          : "bg-red-500/10 text-red-400 border border-red-500/20",
+        meta: `${duration} mins`,
+        rag: rating,
+        fullTopic: topic,
+        fullComment: cleanComment(comment),
+        fullDuration: duration,
+        updatedAt: s.updatedAt || s.date
+      });
+    }
+
+    // 2. Process standalone exam attempts
+    for (const e of sAttempts) {
+      const marksScored = e.marksScored !== undefined ? e.marksScored : (e as any).marks_scored;
+      const marksAvailable = e.marksAvailable !== undefined ? e.marksAvailable : (e as any).marks_available;
+      const questionWording = e.questionWording || (e as any).question_wording || "";
+      const component = e.component || "";
+      const topic = e.topic || "";
+      const dateVal = e.date || "";
+      const selfScore = e.selfMarkingScore !== undefined ? e.selfMarkingScore : (e as any).self_marking_score;
+      const rating = e.rag || (marksAvailable > 0 && (marksScored / marksAvailable) >= 0.7 ? "green" : (marksScored / marksAvailable) >= 0.4 ? "amber" : "red");
+
+      const percentage = marksAvailable > 0 ? (marksScored / marksAvailable) * 100 : 0;
+      const computedDuration = Math.max(1, Math.round(marksAvailable * 1.35));
+
+      rawLogs.push({
+        id: `exam-${e.id}`,
+        originalId: e.id,
+        type: "exam",
+        date: dateVal,
+        title: `${component} - ${topic}`,
+        details: questionWording ? `Question: ${questionWording}` : "Exam question attempt",
+        badge: `Exam Score: ${marksScored}/${marksAvailable} (${percentage.toFixed(0)}%)`,
+        badgeColor: rating === "green" 
+          ? "bg-green-500/10 text-green-400 border border-green-500/20" 
+          : rating === "amber" 
+          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+          : "bg-red-500/10 text-red-400 border border-red-500/20",
+        meta: `Self-Mark: ${selfScore}/10`,
+        rag: rating,
+        fullComponent: component,
+        fullTopic: topic,
+        fullWording: questionWording,
+        fullMarksScored: marksScored,
+        fullMarksAvailable: marksAvailable,
+        fullPercentage: percentage,
+        fullSelfScore: selfScore,
+        fullDuration: computedDuration,
+        updatedAt: e.updatedAt || e.date
+      });
+    }
+
+    // 3. Process external revision service logs directly
+    for (const l of sServiceLogs) {
+      const duration = l.duration || 0;
+      const dateVal = l.date || "";
+      const serviceName = l.serviceName || "External Study Platform";
+      rawLogs.push({
+        id: `servicelog-${l.id}`,
+        originalId: l.id,
+        type: "external",
+        date: dateVal,
+        title: `Study on ${serviceName}`,
+        details: `Platform session on ${serviceName}`,
+        badge: "SENECA/EXTERNAL",
+        badgeColor: "bg-purple-500/15 text-purple-350 border border-purple-500/20",
+        meta: `${duration} mins`,
+        rag: "green",
+        fullTopic: `Study on ${serviceName}`,
+        fullComment: `Session duration: ${duration} minutes on ${serviceName}`,
+        fullDuration: duration,
+        updatedAt: l.updatedAt || l.date
+      });
+    }
+
+    // Deduplicate logs by originalId
+    const uniqueLogsMap = new Map<string, any>();
+    for (const log of rawLogs) {
+      if (!uniqueLogsMap.has(log.originalId)) {
+        uniqueLogsMap.set(log.originalId, log);
+      } else if (log.id.startsWith("session-")) {
+        uniqueLogsMap.set(log.originalId, log);
+      }
+    }
+
+    const cumulativeLogs = Array.from(uniqueLogsMap.values());
+    cumulativeLogs.sort((a, b) => {
+      const timeA = a.updatedAt ? new Date(a.updatedAt).getTime() : new Date(a.date).getTime();
+      const timeB = b.updatedAt ? new Date(b.updatedAt).getTime() : new Date(b.date).getTime();
+      if (timeA !== timeB) return timeB - timeA;
+      return b.date.localeCompare(a.date);
+    });
+
+    return cumulativeLogs;
+  };
 
   const formatTime = (totalSeconds: number): string => {
     const hrs = Math.floor(totalSeconds / 3600);
@@ -5409,9 +5603,9 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="grid sm:grid-cols-12 gap-5">
+                <div className="grid lg:grid-cols-12 gap-6">
                   {/* Left Column: Toggled Roster (Single List or Per Group View) */}
-                  <div className="sm:col-span-7 space-y-3">
+                  <div className="lg:col-span-5 space-y-3">
                     {rosterViewMode === "list" ? (
                       /* Students Roster list */
                       <div>
@@ -5597,7 +5791,7 @@ export default function App() {
                   </div>
 
                   {/* Right Column: Drilling information pane (Shared dynamically between list and group views) */}
-                  <div className="sm:col-span-5 bg-[#030304] rounded-2xl p-4 border border-purple-950/80 flex flex-col justify-between min-h-[350px] h-fit">
+                  <div className="lg:col-span-7 bg-[#030304] rounded-2xl p-6 border border-purple-950/80 flex flex-col justify-between min-h-[450px] h-fit">
                     {selectedStudentDrilldown ? (
                       (() => {
                         const sProfile = teacherData.students.find(s => s.username === selectedStudentDrilldown);
@@ -5611,81 +5805,254 @@ export default function App() {
                           ? sScoresFiltered.reduce((sum, s) => sum + s.percentage, 0) / sScoresFiltered.length
                           : 0;
 
+                        const studentLogs = buildStudentUnifiedLogs(sProfile.username);
+
                         return (
-                          <div className="flex flex-col justify-between h-full space-y-4">
+                          <div className="flex flex-col justify-between h-full space-y-5">
                             <div>
-                              <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
-                                <span className="text-[10px] font-mono text-purple-400 capitalize">Alias: {sProfile.nickname}</span>
-                                <span className="text-[10px] bg-neutral-900 px-2 py-0.5 rounded text-neutral-400">Class {sProfile.classGroup}</span>
+                              {/* Header & Alias Info */}
+                              <div className="flex items-center justify-between border-b border-purple-950/35 pb-3">
+                                <div>
+                                  <span className="text-[10px] font-mono text-purple-400 uppercase tracking-widest font-bold">Candidate dossier</span>
+                                  <h4 className="font-display text-base font-extrabold text-white mt-0.5">{sProfile.nickname}</h4>
+                                  <span className="font-mono text-[9px] text-neutral-500">Username: {sProfile.username}</span>
+                                </div>
+                                <div className="text-right">
+                                  <span className="text-[10px] bg-purple-950/40 text-purple-300 px-2.5 py-1 rounded-lg border border-purple-900/40 font-bold font-mono">Group {sProfile.classGroup}</span>
+                                  <p className="text-[9px] text-neutral-500 mt-1">Year {sProfile.academicYear || "ALL"}</p>
+                                </div>
                               </div>
 
-                              <div className="mt-3.5 space-y-1">
-                                <p className="text-[10px] text-neutral-550 font-mono uppercase">Secure Stats</p>
-                                <div className="text-sm font-semibold text-white font-mono leading-relaxed mt-1 flex items-center">
-                                  <span>Group:</span>
-                                  <select
-                                    value={sProfile.classGroup}
-                                    onChange={(e) => handleReassignStudentGroup(sProfile.username, e.target.value, sProfile.nickname)}
-                                    className="ml-2 bg-[#030304] border border-purple-950/60 rounded px-2 py-0.5 text-xs text-purple-300 font-bold focus:outline-none focus:border-purple-600 transition inline-block"
-                                  >
-                                    <option value="A">Group A</option>
-                                    <option value="B">Group B</option>
-                                    <option value="C">Group C</option>
-                                    <option value="D">Group D</option>
-                                    <option value="E">Group E</option>
-                                  </select>
+                              {/* Reassign Group, Average Secure Percentage, Highest Score */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-neutral-950/50 border border-purple-950/60 rounded-2xl p-4 mt-4">
+                                <div className="space-y-1">
+                                  <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider block">Change Class Group</span>
+                                  <div className="flex items-center">
+                                    <select
+                                      value={sProfile.classGroup}
+                                      onChange={(e) => handleReassignStudentGroup(sProfile.username, e.target.value, sProfile.nickname)}
+                                      className="bg-[#030304] border border-purple-950/80 rounded-xl px-3 py-1.5 text-xs text-purple-200 font-bold focus:outline-none focus:border-purple-600 transition w-full"
+                                    >
+                                      <option value="A">Group A</option>
+                                      <option value="B">Group B</option>
+                                      <option value="C">Group C</option>
+                                      <option value="D">Group D</option>
+                                      <option value="E">Group E</option>
+                                    </select>
+                                  </div>
                                 </div>
-                                <div className="mt-4 pt-1 space-y-1">
-                                  <p className="text-xs font-semibold text-white">
-                                    Average secure percentage:{" "}
+
+                                <div className="space-y-1 justify-center flex flex-col">
+                                  <div className="text-[11px] font-semibold text-neutral-300">
+                                    Average secure score:{" "}
                                     <span className="text-purple-300 font-mono font-bold">{avgVal > 0 ? `${avgVal.toFixed(1)}%` : "N/A"}</span>
-                                  </p>
-                                  <p className="text-xs text-neutral-400 font-semibold mt-1">
+                                  </div>
+                                  <div className="text-[11px] font-semibold text-neutral-300">
                                     Highest secure score:{" "}
-                                    <span className="text-emerald-400 font-mono">
+                                    <span className="text-emerald-400 font-mono font-bold">
                                       {sScoresFiltered.length > 0
                                         ? `${Math.max(...sScoresFiltered.map(x => x.percentage))}%`
-                                        : "None"}
+                                        : "N/A"}
                                     </span>
-                                  </p>
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="mt-4 space-y-2">
-                                <span className="text-[10px] font-mono text-neutral-500 uppercase block">Log entries checklist</span>
-                                <div className="space-y-1.5 max-h-[120px] overflow-y-auto pr-1 text-[11px]">
-                                  {sScoresFiltered.length > 0 ? (
-                                    sScoresFiltered.map(item => (
-                                      <div key={item.id} className="flex justify-between items-center bg-neutral-900 px-2 py-1 rounded">
-                                        <span className="truncate text-neutral-300 font-medium max-w-[60%]">{item.testName}</span>
-                                        <span className="font-mono text-purple-400">{item.percentage}% ({item.grade})</span>
-                                      </div>
-                                    ))
-                                  ) : (
-                                    <p className="text-neutral-600 italic">No test grades submitted.</p>
+                              {/* Multi-Tab navigation for Logs */}
+                              <div className="mt-5">
+                                <div className="flex border-b border-purple-950/40 pb-px overflow-x-auto gap-1">
+                                  {[
+                                    { id: "timeline", label: "Timeline", icon: "⚡" },
+                                    { id: "scores", label: "Secure Exam", icon: "🏆" },
+                                    { id: "sessions", label: "Study Topics", icon: "📖" },
+                                    { id: "attempts", label: "Exam Qs", icon: "📝" },
+                                    { id: "service-logs", label: "External", icon: "🌐" }
+                                  ].map(tab => (
+                                    <button
+                                      key={tab.id}
+                                      type="button"
+                                      onClick={() => setDrilldownSubTab(tab.id as any)}
+                                      className={`px-3 py-2 text-[10px] font-bold uppercase tracking-wider font-mono border-t border-x rounded-t-xl shrink-0 transition-all ${
+                                        drilldownSubTab === tab.id
+                                          ? "bg-neutral-950 border-purple-950 text-purple-300"
+                                          : "bg-transparent border-transparent text-neutral-500 hover:text-neutral-350"
+                                      }`}
+                                    >
+                                      <span className="mr-1">{tab.icon}</span>
+                                      {tab.label}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                {/* Tab Contents */}
+                                <div className="bg-[#050308]/60 border-b border-x border-purple-950/60 p-4 rounded-b-2xl max-h-[300px] overflow-y-auto min-h-[180px] space-y-3">
+                                  
+                                  {/* Timeline Tab */}
+                                  {drilldownSubTab === "timeline" && (
+                                    <div className="space-y-2.5">
+                                      {studentLogs.length > 0 ? (
+                                        studentLogs.map((log) => (
+                                          <div key={log.id} className="bg-neutral-950/80 border border-purple-950/40 p-3 rounded-xl space-y-1.5 text-xs">
+                                            <div className="flex items-center justify-between flex-wrap gap-2">
+                                              <span className={`text-[9px] font-mono font-black uppercase px-2 py-0.5 rounded ${
+                                                log.type === "exam"
+                                                  ? "bg-purple-950/60 text-purple-300"
+                                                  : log.type === "external"
+                                                  ? "bg-purple-950/40 text-purple-400"
+                                                  : "bg-amber-950/40 text-amber-400"
+                                              }`}>
+                                                {log.type.toUpperCase()}
+                                              </span>
+                                              <span className="text-[10px] text-neutral-500 font-mono">{log.date}</span>
+                                            </div>
+                                            <h5 className="font-semibold text-white">{log.title}</h5>
+                                            {log.details && <p className="text-neutral-400 italic text-[11px]">"{log.details}"</p>}
+                                            <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-purple-950/10 text-[10px] font-mono text-neutral-500">
+                                              <span>{log.meta}</span>
+                                              <span className={`px-1.5 py-0.2 rounded font-black uppercase text-[8px] ${log.badgeColor}`}>
+                                                {log.badge}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="text-center py-10 text-neutral-600 italic text-xs">
+                                          No logs or attempts recorded for this candidate.
+                                        </div>
+                                      )}
+                                    </div>
                                   )}
+
+                                  {/* Secure Exams Tab */}
+                                  {drilldownSubTab === "scores" && (
+                                    <div className="space-y-2">
+                                      {sScoresFiltered.length > 0 ? (
+                                        sScoresFiltered.map(item => (
+                                          <div key={item.id} className="flex justify-between items-center bg-neutral-950/80 border border-purple-950/30 px-3 py-2.5 rounded-xl text-xs">
+                                            <div className="truncate max-w-[65%]">
+                                              <span className="font-semibold text-white block truncate">{item.testName}</span>
+                                              <span className="text-[10px] text-neutral-500 font-mono">Date: {item.date}</span>
+                                            </div>
+                                            <span className="font-mono text-purple-400 font-bold bg-purple-950/40 border border-purple-900/40 px-2 py-0.5 rounded">
+                                              {item.percentage}% ({item.grade})
+                                            </span>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="text-center py-10 text-neutral-600 italic text-xs">
+                                          No test grades submitted.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Study Topics Tab */}
+                                  {drilldownSubTab === "sessions" && (
+                                    <div className="space-y-2">
+                                      {studentLogs.filter(l => l.type === "topic").length > 0 ? (
+                                        studentLogs.filter(l => l.type === "topic").map(sess => (
+                                          <div key={sess.id} className="bg-neutral-950/80 border border-purple-950/30 p-3 rounded-xl space-y-1.5 text-xs">
+                                            <div className="flex items-center justify-between">
+                                              <span className="font-semibold text-white truncate max-w-[75%]">{sess.fullTopic}</span>
+                                              <span className={`px-1.5 py-0.2 text-[8px] font-mono font-black rounded uppercase ${sess.badgeColor}`}>
+                                                {sess.rag}
+                                              </span>
+                                            </div>
+                                            {sess.details && <p className="text-neutral-400 italic text-[11px]">"{sess.details}"</p>}
+                                            <div className="flex items-center space-x-4 text-[10px] text-neutral-500 font-mono">
+                                              <span>Date: {sess.date}</span>
+                                              <span>Duration: {sess.fullDuration} mins</span>
+                                            </div>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="text-center py-10 text-neutral-600 italic text-xs">
+                                          No self-logged study sessions recorded.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Exam Question Attempts Tab */}
+                                  {drilldownSubTab === "attempts" && (
+                                    <div className="space-y-2">
+                                      {studentLogs.filter(l => l.type === "exam").length > 0 ? (
+                                        studentLogs.filter(l => l.type === "exam").map(attempt => (
+                                          <div key={attempt.id} className="bg-neutral-950/80 border border-purple-950/30 p-3 rounded-xl space-y-1.5 text-xs">
+                                            <div className="flex items-center justify-between">
+                                              <span className="font-semibold text-white">{attempt.fullComponent}</span>
+                                              <span className="text-purple-350 font-mono text-[10px]">{attempt.fullMarksScored} / {attempt.fullMarksAvailable} ({Math.round(attempt.fullPercentage)}%)</span>
+                                            </div>
+                                            <p className="text-neutral-400 text-[11px]">Topic: <span className="text-neutral-200">{attempt.fullTopic}</span></p>
+                                            {attempt.fullWording && (
+                                              <p className="text-[11px] text-neutral-300 bg-neutral-950 border border-purple-950/20 p-2 rounded-lg italic">
+                                                "{attempt.fullWording}"
+                                              </p>
+                                            )}
+                                            <div className="flex items-center justify-between text-[10px] text-neutral-500 font-mono pt-1">
+                                              <span>Self-Mark: {attempt.fullSelfScore}/10</span>
+                                              <span>Logged: {attempt.date}</span>
+                                            </div>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="text-center py-10 text-neutral-600 italic text-xs">
+                                          No exam questions attempts registered.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* External Platforms Tab */}
+                                  {drilldownSubTab === "service-logs" && (
+                                    <div className="space-y-2">
+                                      {studentLogs.filter(l => l.type === "external").length > 0 ? (
+                                        studentLogs.filter(l => l.type === "external").map(log => (
+                                          <div key={log.id} className="bg-neutral-950/80 border border-purple-950/30 p-3 rounded-xl space-y-1.5 text-xs">
+                                            <div className="flex items-center justify-between">
+                                              <span className="font-semibold text-white">{log.title}</span>
+                                              <span className="text-[10px] text-neutral-500 font-mono">{log.date}</span>
+                                            </div>
+                                            {log.details && <p className="text-neutral-400 italic text-[11px]">"{log.details}"</p>}
+                                            <div className="text-[10px] text-neutral-500 font-mono">
+                                              <span>Duration: {log.fullDuration} mins</span>
+                                            </div>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="text-center py-10 text-neutral-600 italic text-xs">
+                                          No external study sessions registered.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
                                 </div>
                               </div>
+
                             </div>
 
-                            <div className="space-y-2 pt-2 border-t border-purple-950/30">
-                              <button
-                                type="button"
-                                onClick={() => handleResetStudentPassword(sProfile.username, sProfile.nickname)}
-                                className="w-full py-2 bg-purple-950/40 hover:bg-purple-900 border border-purple-900/60 text-purple-350 uppercase font-bold text-[10px] rounded-lg tracking-wider transition inline-flex items-center justify-center space-x-1"
-                              >
-                                <KeyRound className="w-3" />
-                                <span>Reset Student Password</span>
-                              </button>
+                            {/* Action Controls Footer */}
+                            <div className="space-y-2 pt-4 border-t border-purple-950/35">
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetStudentPassword(sProfile.username, sProfile.nickname)}
+                                  className="py-2 bg-purple-950/40 hover:bg-purple-900 border border-purple-900/60 text-purple-350 uppercase font-bold text-[10px] rounded-xl tracking-wider transition inline-flex items-center justify-center space-x-1"
+                                >
+                                  <KeyRound className="w-3" />
+                                  <span>Reset Password</span>
+                                </button>
 
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteStudent(sProfile.username, sProfile.nickname)}
-                                className="w-full py-2 bg-red-950/40 hover:bg-rose-900 border border-red-900/60 text-red-350 uppercase font-bold text-[10px] rounded-lg tracking-wider transition inline-flex items-center justify-center space-x-1"
-                              >
-                                <Trash2 className="w-3" />
-                                <span>Purge Student Profile</span>
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteStudent(sProfile.username, sProfile.nickname)}
+                                  className="py-2 bg-red-950/40 hover:bg-rose-900 border border-red-900/60 text-red-350 uppercase font-bold text-[10px] rounded-xl tracking-wider transition inline-flex items-center justify-center space-x-1"
+                                >
+                                  <Trash2 className="w-3" />
+                                  <span>Purge Profile</span>
+                                </button>
+                              </div>
                               
                               <button
                                 id="drilldown-retract-all"
@@ -5708,7 +6075,7 @@ export default function App() {
                                   );
                                 }}
                                 disabled={sScoresFiltered.length === 0}
-                                className="w-full py-1.5 bg-neutral-900 hover:bg-neutral-850 text-neutral-405 uppercase font-bold text-[9px] rounded-lg tracking-wider disabled:opacity-30 disabled:pointer-events-none transition"
+                                className="w-full py-1.5 bg-neutral-900 hover:bg-neutral-850 text-neutral-405 uppercase font-bold text-[9px] rounded-xl tracking-wider disabled:opacity-30 disabled:pointer-events-none transition"
                               >
                                 Clear Grade Submissions
                               </button>
@@ -6104,6 +6471,7 @@ export default function App() {
                            !s.comment?.includes("__EXAM_METADATA__:")
                     );
                     const sAttempts = attempts.filter(a => a.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase());
+                    const sServiceLogs = logs.filter(l => l.studentUsername.toLowerCase() === selectedChartStudent.toLowerCase());
 
                     return (
                       <div id="individual-revision-viewer" className="bg-[#050308]/60 backdrop-blur-md rounded-3xl border border-purple-950/80 p-6 shadow-2xl animate-fade-in space-y-6">
@@ -6125,7 +6493,7 @@ export default function App() {
                           </button>
                         </div>
 
-                        <div className="grid lg:grid-cols-2 gap-8">
+                        <div className="grid lg:grid-cols-3 gap-8">
                           {/* Student Topic Revision Logs */}
                           <div className="space-y-4">
                             <h5 className="text-xs font-mono tracking-wider uppercase font-bold text-purple-400 flex items-center space-x-2">
@@ -6137,7 +6505,7 @@ export default function App() {
                                 {sSessions.slice().reverse().map(sess => (
                                   <div key={sess.id} className="bg-neutral-950/50 border border-purple-950/40 p-3 rounded-xl space-y-1.5">
                                     <div className="flex items-center justify-between">
-                                      <span className="text-xs font-bold text-white truncate max-w-[200px]">{sess.topic}</span>
+                                      <span className="text-xs font-bold text-white truncate max-w-[150px]">{sess.topic}</span>
                                       <span className={`px-2 py-0.2 text-[8px] font-mono font-black rounded uppercase ${
                                         sess.rag === "green"
                                           ? "bg-green-500/10 text-green-400"
@@ -6176,8 +6544,8 @@ export default function App() {
                                   return (
                                     <div key={attempt.id} className="bg-neutral-950/50 border border-purple-950/40 p-3 rounded-xl space-y-2">
                                       <div className="flex items-center justify-between text-xs font-semibold text-white">
-                                        <span>{attempt.component}</span>
-                                        <span className="text-purple-350 font-mono">{attempt.marksScored} / {attempt.marksAvailable} marks ({percentage}%)</span>
+                                        <span className="truncate max-w-[120px]">{attempt.component}</span>
+                                        <span className="text-purple-350 font-mono text-[10px]">{attempt.marksScored} / {attempt.marksAvailable} marks ({percentage}%)</span>
                                       </div>
                                       <p className="text-xs text-neutral-400">Topic: <span className="text-neutral-200">{attempt.topic}</span></p>
                                       <p className="text-[11px] text-neutral-300 bg-neutral-950 border border-purple-950/35 p-2 rounded-lg italic">
@@ -6194,6 +6562,34 @@ export default function App() {
                             ) : (
                               <div className="text-center py-8 text-neutral-600 bg-neutral-950/20 border border-dashed border-purple-950/30 rounded-xl text-xs italic">
                                 No exam questions attempts registered.
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Student External Platform Study Logs */}
+                          <div className="space-y-4">
+                            <h5 className="text-xs font-mono tracking-wider uppercase font-bold text-purple-400 flex items-center space-x-2">
+                              <span>🌐 External Platform Study ({sServiceLogs.length})</span>
+                            </h5>
+
+                            {sServiceLogs.length > 0 ? (
+                              <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-2">
+                                {sServiceLogs.slice().reverse().map(log => (
+                                  <div key={log.id} className="bg-neutral-950/50 border border-purple-950/40 p-3 rounded-xl space-y-1.5">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-bold text-white truncate max-w-[150px]">Study on {log.serviceName}</span>
+                                      <span className="text-[9px] text-neutral-500 font-mono">{log.date}</span>
+                                    </div>
+                                    <p className="text-xs text-neutral-400">Platform session on {log.serviceName}</p>
+                                    <div className="text-[10px] text-neutral-500 font-mono">
+                                      <span>Duration: {log.duration} mins</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-center py-8 text-neutral-600 bg-neutral-950/20 border border-dashed border-purple-950/30 rounded-xl text-xs italic">
+                                No external platform logs registered.
                               </div>
                             )}
                           </div>
