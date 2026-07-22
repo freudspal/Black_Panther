@@ -880,6 +880,13 @@ export default function App() {
     }
   }, [teacherData, selectedChartStudent, selectedChartTestId, currentUser]);
 
+  // Auto-refresh when entering teacher dashboard or toggling between its sub-tabs
+  useEffect(() => {
+    if (currentUser?.role === "teacher" && currentPage === "teacher-dashboard") {
+      syncApplicationData(true); // quiet background update
+    }
+  }, [currentPage, teacherViewTab, currentUser]);
+
   const showNotification = (text: string, type: "success" | "error" | "info") => {
     setSystemMessage({ text, type });
     setFlashLog(false);
@@ -4400,6 +4407,17 @@ export default function App() {
                 </h2>
                 <p className="text-xs text-neutral-400 mt-1">Real-time class groupings analytics, assessments releases, and individual grade sheets management.</p>
               </div>
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => syncApplicationData(false)}
+                  disabled={isRefreshing}
+                  className="px-4 py-2 bg-purple-950/40 hover:bg-purple-900 border border-purple-900/60 text-purple-350 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center space-x-2 shadow-lg disabled:opacity-50 disabled:pointer-events-none active:scale-95 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                  <span>{isRefreshing ? "Syncing..." : "Sync & Refresh"}</span>
+                </button>
+              </div>
             </div>
 
             {/* Tab switch between Assessments and Revision Progress */}
@@ -5719,12 +5737,12 @@ export default function App() {
 
               // Aggregate minutes per group
               sessions.forEach(s => {
-                const sStudent = students.find(x => x.username === s.studentUsername);
+                const sStudent = students.find(x => x.username.toLowerCase().trim() === s.studentUsername.toLowerCase().trim());
                 const g = sStudent?.classGroup || "A";
                 if (groupMap[g]) groupMap[g].totalMins += s.duration;
               });
               logs.forEach(l => {
-                const lStudent = students.find(x => x.username === l.studentUsername);
+                const lStudent = students.find(x => x.username.toLowerCase().trim() === l.studentUsername.toLowerCase().trim());
                 const g = lStudent?.classGroup || "A";
                 if (groupMap[g]) groupMap[g].totalMins += l.duration;
               });
